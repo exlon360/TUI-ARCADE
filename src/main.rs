@@ -7469,29 +7469,224 @@ fn draw_keeper(
     flush(&buf);
 }
 
+#[derive(Clone, Copy)]
+struct QuestRules {
+    mechanic: &'static str,
+    maze: bool,
+    item_count: usize,
+    hazards_base: usize,
+    hazards_per_difficulty: usize,
+    ordered_count: usize,
+    resource_start: i32,
+    lives_enabled: bool,
+    gated_items: bool,
+    hazard_shift_steps: u32,
+    dust_push_steps: u32,
+    wrong_node_resets: bool,
+}
+
+fn quest_rules(kind: QuestKind) -> QuestRules {
+    match kind {
+        QuestKind::Checkmate => QuestRules {
+            mechanic: "knight-leap-maze",
+            maze: true,
+            item_count: 0,
+            hazards_base: 0,
+            hazards_per_difficulty: 0,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Cipher => QuestRules {
+            mechanic: "ordered-cipher-reset",
+            maze: true,
+            item_count: 0,
+            hazards_base: 0,
+            hazards_per_difficulty: 0,
+            ordered_count: 5,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: true,
+        },
+        QuestKind::Marble => QuestRules {
+            mechanic: "sliding-marble-stops",
+            maze: true,
+            item_count: 0,
+            hazards_base: 0,
+            hazards_per_difficulty: 0,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Quantum => QuestRules {
+            mechanic: "shifting-hidden-hazards",
+            maze: false,
+            item_count: 0,
+            hazards_base: 16,
+            hazards_per_difficulty: 8,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 9,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Go => QuestRules {
+            mechanic: "open-territory-claim",
+            maze: false,
+            item_count: 9,
+            hazards_base: 0,
+            hazards_per_difficulty: 0,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: true,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Pirate => QuestRules {
+            mechanic: "treasure-with-patrol-lives",
+            maze: true,
+            item_count: 5,
+            hazards_base: 5,
+            hazards_per_difficulty: 2,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: true,
+            gated_items: true,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Samurai => QuestRules {
+            mechanic: "honor-trace-sentry-lives",
+            maze: true,
+            item_count: 0,
+            hazards_base: 6,
+            hazards_per_difficulty: 2,
+            ordered_count: 5,
+            resource_start: 0,
+            lives_enabled: true,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Mars => QuestRules {
+            mechanic: "battery-dust-hidden-field",
+            maze: false,
+            item_count: 0,
+            hazards_base: 18,
+            hazards_per_difficulty: 7,
+            ordered_count: 0,
+            resource_start: 70,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 13,
+            wrong_node_resets: false,
+        },
+        QuestKind::DeepSea => QuestRules {
+            mechanic: "pressure-sonar-oxygen-vents",
+            maze: false,
+            item_count: 4,
+            hazards_base: 18,
+            hazards_per_difficulty: 7,
+            ordered_count: 0,
+            resource_start: 85,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Volcano => QuestRules {
+            mechanic: "rising-lava-relic-race",
+            maze: true,
+            item_count: 4,
+            hazards_base: 0,
+            hazards_per_difficulty: 0,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: true,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Jungle => QuestRules {
+            mechanic: "visible-trap-relic-maze",
+            maze: true,
+            item_count: 5,
+            hazards_base: 12,
+            hazards_per_difficulty: 2,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: true,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Dragon => QuestRules {
+            mechanic: "hot-lair-gold-heist",
+            maze: true,
+            item_count: 5,
+            hazards_base: 8,
+            hazards_per_difficulty: 3,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: true,
+            gated_items: true,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+        QuestKind::Mirror => QuestRules {
+            mechanic: "mirrored-sliding-maze",
+            maze: true,
+            item_count: 0,
+            hazards_base: 0,
+            hazards_per_difficulty: 0,
+            ordered_count: 0,
+            resource_start: 0,
+            lives_enabled: false,
+            gated_items: false,
+            hazard_shift_steps: 0,
+            dust_push_steps: 0,
+            wrong_node_resets: false,
+        },
+    }
+}
+
 fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
     if !require_size(state, 22, 62, name) {
         return;
     }
     loop {
+        let rules = quest_rules(kind);
         let (w, h) = full_board(44, 15, 96, 32);
         let start = (1, h - 2);
         let goal = (w - 2, 1);
-        let maze_kind = !matches!(
-            kind,
-            QuestKind::Quantum | QuestKind::Go | QuestKind::Mars | QuestKind::DeepSea
-        );
-        let walls = if maze_kind {
+        let walls = if rules.maze {
             make_maze(state, w, h, start, goal)
         } else {
             HashSet::new()
         };
-        let item_count = match kind {
-            QuestKind::Go => 9,
-            QuestKind::Pirate | QuestKind::Jungle | QuestKind::Dragon => 5,
-            QuestKind::Volcano => 4,
-            _ => 0,
-        };
+        let item_count = rules.item_count;
         let mut blocked = HashSet::from([start, goal]);
         let mut items = HashSet::new();
         for _ in 0..item_count {
@@ -7499,24 +7694,15 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
             blocked.insert(point);
             items.insert(point);
         }
-        let hazard_count = match kind {
-            QuestKind::Quantum | QuestKind::Mars | QuestKind::DeepSea => {
-                18 + state.difficulty_index * 7
-            }
-            QuestKind::Dragon => 8,
-            QuestKind::Jungle => 12,
-            _ => 0,
-        };
+        let hazard_count =
+            rules.hazards_base + state.difficulty_index * rules.hazards_per_difficulty;
         let mut hazards = HashSet::new();
         for _ in 0..hazard_count {
             let point = quest_open_point(state, w, h, start, &walls, &blocked);
             blocked.insert(point);
             hazards.insert(point);
         }
-        let ordered_count = match kind {
-            QuestKind::Cipher | QuestKind::Samurai => 5,
-            _ => 0,
-        };
+        let ordered_count = rules.ordered_count;
         let mut nodes = Vec::new();
         for n in 1..=ordered_count {
             let point = quest_open_point(state, w, h, start, &walls, &blocked);
@@ -7527,10 +7713,16 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
         let mut player = start;
         let mut steps = 0u32;
         let mut next_node = 1i32;
-        let mut resource = 100i32;
+        let mut resource = rules.resource_start;
+        let mut lives = if rules.lives_enabled {
+            state.difficulty().lives
+        } else {
+            1
+        };
         let mut lava_y = h - 1;
+        let mut last_step_effect = 0u32;
         let mut score_bonus = 0u32;
-        let mut status = quest_help(kind).to_string();
+        let mut status = format!("{} [{}]", quest_help(kind), rules.mechanic);
         let mut won = false;
         let mut lost = false;
 
@@ -7602,10 +7794,33 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
             if items.remove(&player) {
                 score_bonus += match kind {
                     QuestKind::Go => 30,
+                    QuestKind::DeepSea => {
+                        resource = (resource + 28).min(100);
+                        20
+                    }
                     QuestKind::Pirate | QuestKind::Dragon => 55,
                     _ => 40,
                 };
                 play_sound(state, "score");
+            }
+            if let Some(&(x, y, n)) = nodes
+                .iter()
+                .find(|&&(x, y, n)| (x, y) == player && n != next_node)
+            {
+                if rules.wrong_node_resets {
+                    player = start;
+                    steps += 5;
+                    status = format!("Wrong cipher node {n}; route scrambled.");
+                    play_sound(state, "alert");
+                } else if matches!(kind, QuestKind::Samurai) {
+                    lives -= 1;
+                    player = start;
+                    status = format!("Wrong honor mark at {x},{y}. Lives {lives}.");
+                    play_sound(state, "alert");
+                    if lives <= 0 {
+                        lost = true;
+                    }
+                }
             }
             if let Some(pos) = nodes
                 .iter()
@@ -7617,6 +7832,28 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
                 play_sound(state, "score");
             }
 
+            if steps != last_step_effect {
+                last_step_effect = steps;
+                if rules.hazard_shift_steps > 0 && steps % rules.hazard_shift_steps == 0 {
+                    if let Some(old) = hazards.iter().copied().next() {
+                        hazards.remove(&old);
+                        let replacement = quest_open_point(state, w, h, start, &walls, &blocked);
+                        hazards.insert(replacement);
+                    }
+                }
+                if rules.dust_push_steps > 0 && steps % rules.dust_push_steps == 0 {
+                    let delta = if (steps / rules.dust_push_steps) % 2 == 0 {
+                        (1, 0)
+                    } else {
+                        (-1, 0)
+                    };
+                    let pushed = (player.0 + delta.0, player.1 + delta.1);
+                    if quest_can_enter(pushed, w, h, &walls) {
+                        player = pushed;
+                    }
+                    resource -= 4 + state.difficulty_index as i32;
+                }
+            }
             if matches!(kind, QuestKind::Volcano) && steps > 0 && steps % 12 == 0 {
                 lava_y = (lava_y - 1).max(2);
             }
@@ -7628,14 +7865,38 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
                 status = "Scanner missed a hidden hazard.".to_string();
                 play_sound(state, "alert");
             }
-            if matches!(kind, QuestKind::Dragon | QuestKind::Jungle) && hazards.contains(&player) {
-                lost = true;
-                status = "Caught by the lair traps.".to_string();
+            if matches!(kind, QuestKind::DeepSea) && hazards.contains(&player) {
+                resource -= 25;
+                player = start;
+                status = "Sonar hit a pressure mine; back to the trench mouth.".to_string();
+                play_sound(state, "alert");
+            }
+            if matches!(
+                kind,
+                QuestKind::Dragon | QuestKind::Jungle | QuestKind::Pirate | QuestKind::Samurai
+            ) && hazards.contains(&player)
+            {
+                if rules.lives_enabled {
+                    lives -= 1;
+                    player = start;
+                    status = format!("Patrol hit. Lives {lives}.");
+                    if lives <= 0 {
+                        lost = true;
+                    }
+                } else {
+                    lost = true;
+                    status = "Caught by the lair traps.".to_string();
+                }
                 play_sound(state, "alert");
             }
             if matches!(kind, QuestKind::Volcano) && player.1 >= lava_y {
                 lost = true;
                 status = "The lava reached you.".to_string();
+                play_sound(state, "alert");
+            }
+            if matches!(kind, QuestKind::Mars) && resource <= 0 {
+                lost = true;
+                status = "The rover battery died in the dust.".to_string();
                 play_sound(state, "alert");
             }
             if matches!(kind, QuestKind::DeepSea) && resource <= 0 {
@@ -7661,16 +7922,24 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
                         "Left and right are mirrored; sliding movement is active.".to_string()
                     }
                     QuestKind::Quantum | QuestKind::Mars => {
-                        format!("Scanner ping: {nearby} hidden hazard(s).")
+                        if matches!(kind, QuestKind::Mars) {
+                            format!("Battery {resource}. Scanner ping: {nearby}. Dust pushes.")
+                        } else {
+                            format!("Scanner ping: {nearby}. Hazards blink every 9 steps.")
+                        }
                     }
-                    QuestKind::DeepSea => format!("Pressure {resource}. Sonar ping: {nearby}."),
+                    QuestKind::DeepSea => {
+                        format!("Pressure {resource}. Sonar ping: {nearby}. Vents refill.")
+                    }
                     QuestKind::Volcano => {
                         format!("Relics left: {}. Lava row: {lava_y}.", items.len())
                     }
                     QuestKind::Go => {
                         format!("Territory left: {}. Exit after claiming it.", items.len())
                     }
-                    QuestKind::Pirate => format!("Treasure left: {}.", items.len()),
+                    QuestKind::Pirate => {
+                        format!("Treasure left: {}. Lives {lives}.", items.len())
+                    }
                     QuestKind::Jungle => {
                         format!(
                             "Relics left: {}. Visible traps block greedy routes.",
@@ -7678,19 +7947,15 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
                         )
                     }
                     QuestKind::Dragon => {
-                        format!("Gold left: {}. Avoid the hot lair marks.", items.len())
+                        format!(
+                            "Gold left: {}. Lives {lives}. Avoid hot marks.",
+                            items.len()
+                        )
                     }
                 };
             }
 
-            let needs_items = matches!(
-                kind,
-                QuestKind::Go
-                    | QuestKind::Pirate
-                    | QuestKind::Jungle
-                    | QuestKind::Dragon
-                    | QuestKind::Volcano
-            );
+            let needs_items = rules.gated_items;
             let needs_nodes = ordered_count > 0;
             if player == goal
                 && (!needs_items || items.is_empty())
@@ -7727,17 +7992,17 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
 fn quest_help(kind: QuestKind) -> &'static str {
     match kind {
         QuestKind::Checkmate => "Use chessy knight leaps to reach the king.",
-        QuestKind::Cipher => "Trace cipher nodes in order.",
+        QuestKind::Cipher => "Trace cipher nodes in order; wrong nodes reset the route.",
         QuestKind::Marble => "Roll until blocked.",
-        QuestKind::Quantum => "Use scanner pings to dodge hidden hazards.",
+        QuestKind::Quantum => "Use scanner pings; hidden hazards blink around.",
         QuestKind::Go => "Claim territory before exiting.",
-        QuestKind::Pirate => "Collect all treasure, then escape.",
-        QuestKind::Samurai => "Trace honor nodes in order.",
-        QuestKind::Mars => "Scan the red field and reach the uplink.",
-        QuestKind::DeepSea => "Watch pressure and sonar pings.",
+        QuestKind::Pirate => "Collect treasure while patrols burn lives.",
+        QuestKind::Samurai => "Trace honor nodes while sentries punish mistakes.",
+        QuestKind::Mars => "Scan hidden hazards, save battery, and fight dust pushes.",
+        QuestKind::DeepSea => "Watch pressure, sonar pings, and oxygen vents.",
         QuestKind::Volcano => "Grab relics while lava rises.",
         QuestKind::Jungle => "Collect relics and avoid traps.",
-        QuestKind::Dragon => "Steal gold without stepping into hot marks.",
+        QuestKind::Dragon => "Steal gold through hot lair marks with limited lives.",
         QuestKind::Mirror => "Mirrored controls and slide movement.",
     }
 }
@@ -7905,19 +8170,337 @@ fn draw_micro_quest(
     flush(&buf);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum LaneMeter {
+    None,
+    Balance,
+    Reserve,
+    Heat,
+    Oxygen,
+    Time,
+}
+
+#[derive(Clone, Copy)]
+struct LaneRules {
+    mechanic: &'static str,
+    lanes: usize,
+    target: u32,
+    value: u32,
+    spawn_ms: u64,
+    speed: f64,
+    good_chance: (u32, u32),
+    jump_frames: i32,
+    meter: LaneMeter,
+    meter_drain: i32,
+    meter_gain: i32,
+    side_push_period: u32,
+    miss_good_costs_life: bool,
+    extra_bad_chance: (u32, u32),
+    player: &'static str,
+    good: &'static str,
+    bad: &'static str,
+    help: &'static str,
+}
+
+fn lane_rules(kind: LaneKind) -> LaneRules {
+    match kind {
+        LaneKind::Rune => LaneRules {
+            mechanic: "jump-rune-gates",
+            lanes: 4,
+            target: 12,
+            value: 24,
+            spawn_ms: 430,
+            speed: 0.47,
+            good_chance: (2, 5),
+            jump_frames: 3,
+            meter: LaneMeter::None,
+            meter_drain: 0,
+            meter_gain: 0,
+            side_push_period: 0,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 5),
+            player: "<R>",
+            good: "+",
+            bad: "|",
+            help: "A/D lanes, Space vaults rune gates",
+        },
+        LaneKind::Sea => LaneRules {
+            mechanic: "naval-flag-current",
+            lanes: 5,
+            target: 11,
+            value: 22,
+            spawn_ms: 470,
+            speed: 0.42,
+            good_chance: (1, 3),
+            jump_frames: 0,
+            meter: LaneMeter::Reserve,
+            meter_drain: 1,
+            meter_gain: 15,
+            side_push_period: 11,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 6),
+            player: "<S>",
+            good: "F",
+            bad: "*",
+            help: "Current nudges you; flags refill reserve",
+        },
+        LaneKind::AirHockey => LaneRules {
+            mechanic: "paddle-power-pucks",
+            lanes: 3,
+            target: 16,
+            value: 18,
+            spawn_ms: 310,
+            speed: 0.66,
+            good_chance: (3, 5),
+            jump_frames: 0,
+            meter: LaneMeter::None,
+            meter_drain: 0,
+            meter_gain: 0,
+            side_push_period: 0,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 3),
+            player: "[H]",
+            good: "o",
+            bad: "O",
+            help: "Tiny rink, fast pucks, dodge heavy rebounds",
+        },
+        LaneKind::Hockey => LaneRules {
+            mechanic: "checking-breakaway",
+            lanes: 5,
+            target: 13,
+            value: 25,
+            spawn_ms: 390,
+            speed: 0.55,
+            good_chance: (2, 5),
+            jump_frames: 0,
+            meter: LaneMeter::Heat,
+            meter_drain: -1,
+            meter_gain: -18,
+            side_push_period: 9,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 4),
+            player: "/H\\",
+            good: "o",
+            bad: "#",
+            help: "Checks shove lanes; pucks cool the breakaway",
+        },
+        LaneKind::Ski => LaneRules {
+            mechanic: "mandatory-slalom-gates",
+            lanes: 5,
+            target: 15,
+            value: 28,
+            spawn_ms: 360,
+            speed: 0.58,
+            good_chance: (1, 1),
+            jump_frames: 0,
+            meter: LaneMeter::None,
+            meter_drain: 0,
+            meter_gain: 0,
+            side_push_period: 0,
+            miss_good_costs_life: true,
+            extra_bad_chance: (0, 1),
+            player: "/S\\",
+            good: "G",
+            bad: "^",
+            help: "Hit every slalom gate; missed gates cost lives",
+        },
+        LaneKind::Snowboard => LaneRules {
+            mechanic: "balance-rail-sparks",
+            lanes: 4,
+            target: 14,
+            value: 27,
+            spawn_ms: 410,
+            speed: 0.48,
+            good_chance: (1, 2),
+            jump_frames: 0,
+            meter: LaneMeter::Balance,
+            meter_drain: 2,
+            meter_gain: 5,
+            side_push_period: 0,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 5),
+            player: "/R\\",
+            good: "*",
+            bad: "X",
+            help: "W/S trims balance while you collect sparks",
+        },
+        LaneKind::Bmx => LaneRules {
+            mechanic: "bunny-hop-repair-run",
+            lanes: 6,
+            target: 13,
+            value: 24,
+            spawn_ms: 350,
+            speed: 0.57,
+            good_chance: (2, 5),
+            jump_frames: 2,
+            meter: LaneMeter::None,
+            meter_drain: 0,
+            meter_gain: 0,
+            side_push_period: 0,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 3),
+            player: "/X\\",
+            good: "+",
+            bad: "[]",
+            help: "Six-lane alley; Space bunny-hops debris",
+        },
+        LaneKind::Horse => LaneRules {
+            mechanic: "stamina-hurdle-dash",
+            lanes: 4,
+            target: 14,
+            value: 26,
+            spawn_ms: 420,
+            speed: 0.52,
+            good_chance: (2, 5),
+            jump_frames: 3,
+            meter: LaneMeter::Reserve,
+            meter_drain: 2,
+            meter_gain: 20,
+            side_push_period: 0,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 4),
+            player: "/H\\",
+            good: "U",
+            bad: "|",
+            help: "Space jumps hurdles; horseshoes refill stamina",
+        },
+        LaneKind::Ninja => LaneRules {
+            mechanic: "rooftop-scroll-jumps",
+            lanes: 5,
+            target: 12,
+            value: 30,
+            spawn_ms: 330,
+            speed: 0.62,
+            good_chance: (1, 3),
+            jump_frames: 2,
+            meter: LaneMeter::None,
+            meter_drain: 0,
+            meter_gain: 0,
+            side_push_period: 7,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 3),
+            player: "<N>",
+            good: "S",
+            bad: "#",
+            help: "Wind shifts rooftops; jump gaps with Space",
+        },
+        LaneKind::Moon => LaneRules {
+            mechanic: "low-gravity-ore-hop",
+            lanes: 5,
+            target: 10,
+            value: 32,
+            spawn_ms: 500,
+            speed: 0.36,
+            good_chance: (2, 5),
+            jump_frames: 5,
+            meter: LaneMeter::Oxygen,
+            meter_drain: 1,
+            meter_gain: 16,
+            side_push_period: 13,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 6),
+            player: "/M\\",
+            good: "o",
+            bad: "#",
+            help: "Long moon hops; oxygen ticks down",
+        },
+        LaneKind::Saturn => LaneRules {
+            mechanic: "ring-orbit-lanes",
+            lanes: 6,
+            target: 15,
+            value: 22,
+            spawn_ms: 340,
+            speed: 0.61,
+            good_chance: (1, 3),
+            jump_frames: 0,
+            meter: LaneMeter::None,
+            meter_drain: 0,
+            meter_gain: 0,
+            side_push_period: 5,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 4),
+            player: "[S]",
+            good: "o",
+            bad: "*",
+            help: "Ring gravity shoves lanes every few beats",
+        },
+        LaneKind::Submarine => LaneRules {
+            mechanic: "oxygen-mine-sweep",
+            lanes: 4,
+            target: 12,
+            value: 25,
+            spawn_ms: 440,
+            speed: 0.45,
+            good_chance: (1, 3),
+            jump_frames: 0,
+            meter: LaneMeter::Oxygen,
+            meter_drain: 2,
+            meter_gain: 24,
+            side_push_period: 0,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 4),
+            player: "<U>",
+            good: "O",
+            bad: "*",
+            help: "Oxygen drops fast; tanks are mandatory",
+        },
+        LaneKind::Desert => LaneRules {
+            mechanic: "heat-water-caravan",
+            lanes: 5,
+            target: 12,
+            value: 24,
+            spawn_ms: 460,
+            speed: 0.44,
+            good_chance: (1, 3),
+            jump_frames: 0,
+            meter: LaneMeter::Reserve,
+            meter_drain: 2,
+            meter_gain: 22,
+            side_push_period: 8,
+            miss_good_costs_life: false,
+            extra_bad_chance: (1, 5),
+            player: "/C\\",
+            good: "W",
+            bad: "~",
+            help: "Mirages shove you; water keeps the caravan alive",
+        },
+        LaneKind::Time => LaneRules {
+            mechanic: "time-spark-speedrun",
+            lanes: 5,
+            target: 16,
+            value: 21,
+            spawn_ms: 280,
+            speed: 0.72,
+            good_chance: (2, 5),
+            jump_frames: 0,
+            meter: LaneMeter::Time,
+            meter_drain: 3,
+            meter_gain: 13,
+            side_push_period: 4,
+            miss_good_costs_life: true,
+            extra_bad_chance: (1, 3),
+            player: "<T>",
+            good: "*",
+            bad: "|",
+            help: "Fastest lanes; sparks buy time, misses hurt",
+        },
+    }
+}
+
 fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
     if !require_size(state, 22, 58, name) {
         return;
     }
     loop {
-        let lanes = 5usize;
+        let rules = lane_rules(kind);
+        let lanes = rules.lanes;
         let track_h = 14i32;
         let mut player_lane = 2usize;
         let mut objects: Vec<(usize, f64, bool)> = Vec::new();
         let mut lives = state.difficulty().lives;
         let mut score = 0u32;
         let mut collected = 0u32;
-        let target = lane_target(kind);
+        let target = rules.target + state.difficulty_index as u32;
         let mut meter = 80i32;
         let mut jump = 0i32;
         let mut tick = 0u32;
@@ -7928,15 +8511,14 @@ fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
                 match key {
                     Key::Left | Key::Char('a') if player_lane > 0 => player_lane -= 1,
                     Key::Right | Key::Char('d') if player_lane + 1 < lanes => player_lane += 1,
-                    Key::Up | Key::Char('w') if matches!(kind, LaneKind::Snowboard) => meter += 5,
-                    Key::Down | Key::Char('s') if matches!(kind, LaneKind::Snowboard) => meter -= 5,
-                    Key::Enter | Key::Space
-                        if matches!(
-                            kind,
-                            LaneKind::Rune | LaneKind::Bmx | LaneKind::Horse | LaneKind::Ninja
-                        ) =>
-                    {
-                        jump = 3;
+                    Key::Up | Key::Char('w') if rules.meter == LaneMeter::Balance => {
+                        meter += rules.meter_gain.max(1);
+                    }
+                    Key::Down | Key::Char('s') if rules.meter == LaneMeter::Balance => {
+                        meter -= rules.meter_gain.max(1);
+                    }
+                    Key::Enter | Key::Space if rules.jump_frames > 0 => {
+                        jump = rules.jump_frames;
                     }
                     _ if is_pause(key) => {
                         if pause_screen(state).is_none() {
@@ -7951,20 +8533,27 @@ fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
             if jump > 0 {
                 jump -= 1;
             }
-            if matches!(
-                kind,
-                LaneKind::Desert | LaneKind::Horse | LaneKind::Submarine
-            ) && tick % 8 == 0
-            {
-                meter -= 1 + state.difficulty_index as i32;
-                if meter <= 0 {
+            if rules.side_push_period > 0 && tick % rules.side_push_period == 0 {
+                let push_right = (tick / rules.side_push_period) % 2 == 0;
+                if push_right && player_lane + 1 < lanes {
+                    player_lane += 1;
+                } else if !push_right && player_lane > 0 {
+                    player_lane -= 1;
+                }
+            }
+            if rules.meter != LaneMeter::None && tick % 8 == 0 {
+                meter -= rules.meter_drain + state.difficulty_index as i32;
+                if rules.meter == LaneMeter::Heat {
+                    meter += 5 + state.difficulty_index as i32;
+                }
+                if meter <= 0 || meter >= 125 {
                     lives -= 1;
-                    meter = 45;
+                    meter = 70;
                     play_sound(state, "alert");
                 }
             }
-            if matches!(kind, LaneKind::Snowboard) {
-                meter += if tick % 2 == 0 { -2 } else { 1 };
+            if rules.meter == LaneMeter::Balance {
+                meter += if tick % 2 == 0 { -rules.meter_drain } else { 1 };
                 if !(20..=120).contains(&meter) {
                     lives -= 1;
                     meter = 80;
@@ -7972,31 +8561,27 @@ fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
                 }
             }
             if last_spawn.elapsed()
-                >= Duration::from_millis((460.0 / state.difficulty().speed) as u64)
+                >= Duration::from_millis((rules.spawn_ms as f64 / state.difficulty().speed) as u64)
             {
-                let good = match kind {
-                    LaneKind::Ski => true,
-                    LaneKind::Snowboard => state.rng.chance(1, 2),
-                    _ => state.rng.chance(2, 5),
-                };
+                let good = state.rng.chance(rules.good_chance.0, rules.good_chance.1);
                 objects.push((state.rng.usize(lanes), 1.0, good));
-                if state.difficulty_index > 0 && state.rng.chance(1, 4) {
+                if state.difficulty_index > 0
+                    && state
+                        .rng
+                        .chance(rules.extra_bad_chance.0, rules.extra_bad_chance.1)
+                {
                     objects.push((state.rng.usize(lanes), 1.0, false));
                 }
                 last_spawn = Instant::now();
             }
             for object in &mut objects {
-                object.1 += match kind {
-                    LaneKind::Time => 0.62,
-                    LaneKind::Ski | LaneKind::Bmx => 0.52,
-                    _ => 0.42,
-                } * state.difficulty().speed;
+                object.1 += rules.speed * state.difficulty().speed;
             }
             let mut kept = Vec::new();
             for (lane, y, good) in objects.into_iter() {
                 let at_player = y.round() as i32 >= track_h - 2 && lane == player_lane;
                 if y.round() as i32 >= track_h {
-                    if matches!(kind, LaneKind::Ski) && good && lane != player_lane {
+                    if rules.miss_good_costs_life && good && lane != player_lane {
                         lives -= 1;
                         play_sound(state, "alert");
                     }
@@ -8005,18 +8590,22 @@ fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
                 if at_player {
                     if good {
                         collected += 1;
-                        score += lane_value(kind);
-                        if matches!(
-                            kind,
-                            LaneKind::Desert | LaneKind::Horse | LaneKind::Submarine
-                        ) {
-                            meter = (meter + 18).min(120);
+                        score += rules.value;
+                        if rules.meter != LaneMeter::None {
+                            if rules.meter == LaneMeter::Heat {
+                                meter = (meter + rules.meter_gain).clamp(0, 120);
+                            } else {
+                                meter = (meter + rules.meter_gain).min(120);
+                            }
                         }
                         play_sound(state, "score");
                     } else if jump > 0 {
-                        score += 8;
+                        score += 8 + rules.value / 5;
                     } else {
                         lives -= 1;
+                        if rules.meter == LaneMeter::Heat {
+                            meter = (meter + 12).min(120);
+                        }
                         play_sound(state, "alert");
                     }
                 } else {
@@ -8057,41 +8646,6 @@ fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
     }
 }
 
-fn lane_target(kind: LaneKind) -> u32 {
-    match kind {
-        LaneKind::Ski | LaneKind::Snowboard | LaneKind::Bmx | LaneKind::Horse => 14,
-        LaneKind::Desert | LaneKind::Submarine => 12,
-        _ => 10,
-    }
-}
-
-fn lane_value(kind: LaneKind) -> u32 {
-    match kind {
-        LaneKind::Ski | LaneKind::Snowboard => 25,
-        LaneKind::AirHockey | LaneKind::Hockey => 22,
-        _ => 20,
-    }
-}
-
-fn lane_sprites(kind: LaneKind) -> (&'static str, &'static str, &'static str) {
-    match kind {
-        LaneKind::Rune => ("<R>", "+", "|"),
-        LaneKind::Sea => ("<S>", "F", "*"),
-        LaneKind::AirHockey => ("[H]", "+", "o"),
-        LaneKind::Hockey => ("/H\\", "o", "#"),
-        LaneKind::Ski => ("/S\\", "G", "^"),
-        LaneKind::Snowboard => ("/R\\", "*", "X"),
-        LaneKind::Bmx => ("/X\\", "+", "[]"),
-        LaneKind::Horse => ("/H\\", "U", "|"),
-        LaneKind::Ninja => ("<N>", "S", "#"),
-        LaneKind::Moon => ("/M\\", "o", "#"),
-        LaneKind::Saturn => ("[S]", "o", "*"),
-        LaneKind::Submarine => ("<U>", "O", "*"),
-        LaneKind::Desert => ("/C\\", "W", "~"),
-        LaneKind::Time => ("<T>", "*", "|"),
-    }
-}
-
 fn draw_micro_lane(
     state: &AppState,
     name: &str,
@@ -8112,18 +8666,15 @@ fn draw_micro_lane(
     let top = rows / 2 - track_h as usize / 2 + 1;
     let left = cols / 2 - 16;
     let lane_gap = 8usize;
-    let (player, good, bad) = lane_sprites(kind);
-    let status = if matches!(kind, LaneKind::Snowboard) {
-        format!("Balance {meter}")
-    } else if matches!(
-        kind,
-        LaneKind::Desert | LaneKind::Horse | LaneKind::Submarine
-    ) {
-        format!("Reserve {meter}")
-    } else if jump > 0 {
-        "Jump".to_string()
-    } else {
-        "Lane".to_string()
+    let rules = lane_rules(kind);
+    let status = match rules.meter {
+        LaneMeter::Balance => format!("Balance {meter}"),
+        LaneMeter::Reserve => format!("Reserve {meter}"),
+        LaneMeter::Heat => format!("Heat {meter}"),
+        LaneMeter::Oxygen => format!("O2 {meter}"),
+        LaneMeter::Time => format!("Time {meter}"),
+        LaneMeter::None if jump > 0 => "Jump".to_string(),
+        LaneMeter::None => rules.mechanic.to_string(),
     };
     let mut buf = String::new();
     clear_buf(&mut buf, &theme);
@@ -8165,7 +8716,7 @@ fn draw_micro_lane(
             &mut buf,
             top + y.round().max(0.0) as usize,
             x.saturating_sub(1),
-            if is_good { good } else { bad },
+            if is_good { rules.good } else { rules.bad },
             &theme,
             if is_good { Role::Success } else { Role::Danger },
             true,
@@ -8175,7 +8726,7 @@ fn draw_micro_lane(
         &mut buf,
         top + track_h as usize - 1,
         left + player_lane * lane_gap - 1,
-        player,
+        rules.player,
         &theme,
         if jump > 0 {
             Role::Highlight
@@ -8187,13 +8738,200 @@ fn draw_micro_lane(
     center(
         &mut buf,
         top + track_h as usize + 2,
-        "A/D lanes. Space jumps in runner games. Snowboard uses W/S balance.",
+        rules.help,
         &theme,
         Role::Muted,
         false,
         cols,
     );
     flush(&buf);
+}
+
+#[derive(Clone, Copy)]
+struct CatchRules {
+    mechanic: &'static str,
+    target: u32,
+    speed: f64,
+    spawn_ms: u64,
+    good_chance: (u32, u32),
+    catch_width: i32,
+    player_step: i32,
+    needs_action: bool,
+    miss_good_costs_life: bool,
+    combo: bool,
+    recipe: bool,
+    shield: bool,
+    player: &'static str,
+    good: &'static str,
+    bad: &'static str,
+    help: &'static str,
+}
+
+fn catch_rules(kind: CatchKind) -> CatchRules {
+    match kind {
+        CatchKind::Glyph => CatchRules {
+            mechanic: "rare-glyph-combo",
+            target: 14,
+            speed: 0.40,
+            spawn_ms: 430,
+            good_chance: (1, 3),
+            catch_width: 2,
+            player_step: 2,
+            needs_action: false,
+            miss_good_costs_life: true,
+            combo: true,
+            recipe: false,
+            shield: false,
+            player: "{V}",
+            good: "*",
+            bad: "x",
+            help: "Catch glyph blooms; misses break the combo",
+        },
+        CatchKind::Pinball => CatchRules {
+            mechanic: "flipper-timing-bumpers",
+            target: 20,
+            speed: 0.66,
+            spawn_ms: 300,
+            good_chance: (3, 4),
+            catch_width: 3,
+            player_step: 3,
+            needs_action: true,
+            miss_good_costs_life: false,
+            combo: true,
+            recipe: false,
+            shield: false,
+            player: "[=]",
+            good: "o",
+            bad: "v",
+            help: "Space flips when the ball reaches the flipper",
+        },
+        CatchKind::Tennis => CatchRules {
+            mechanic: "rally-sweet-spot",
+            target: 12,
+            speed: 0.56,
+            spawn_ms: 390,
+            good_chance: (2, 3),
+            catch_width: 1,
+            player_step: 2,
+            needs_action: true,
+            miss_good_costs_life: true,
+            combo: true,
+            recipe: false,
+            shield: false,
+            player: "[T]",
+            good: "o",
+            bad: "F",
+            help: "Line up and press Space in the sweet spot",
+        },
+        CatchKind::Cricket => CatchRules {
+            mechanic: "wicket-catch-bouncers",
+            target: 11,
+            speed: 0.52,
+            spawn_ms: 420,
+            good_chance: (1, 2),
+            catch_width: 2,
+            player_step: 2,
+            needs_action: true,
+            miss_good_costs_life: true,
+            combo: false,
+            recipe: false,
+            shield: false,
+            player: "[C]",
+            good: "o",
+            bad: "b",
+            help: "Space catches balls; bouncers punish bad reads",
+        },
+        CatchKind::Alien => CatchRules {
+            mechanic: "alien-orchard-harvest",
+            target: 13,
+            speed: 0.44,
+            spawn_ms: 410,
+            good_chance: (2, 5),
+            catch_width: 2,
+            player_step: 3,
+            needs_action: false,
+            miss_good_costs_life: false,
+            combo: true,
+            recipe: false,
+            shield: false,
+            player: "{O}",
+            good: "@",
+            bad: "x",
+            help: "Wide alien basket; harvest streaks score big",
+        },
+        CatchKind::Astro => CatchRules {
+            mechanic: "orbit-crop-bad-seeds",
+            target: 15,
+            speed: 0.36,
+            spawn_ms: 360,
+            good_chance: (1, 2),
+            catch_width: 1,
+            player_step: 1,
+            needs_action: false,
+            miss_good_costs_life: true,
+            combo: false,
+            recipe: false,
+            shield: false,
+            player: "[F]",
+            good: "%",
+            bad: "b",
+            help: "Slow precise farming; bad seeds are costly",
+        },
+        CatchKind::Castle => CatchRules {
+            mechanic: "siege-supply-shield",
+            target: 16,
+            speed: 0.48,
+            spawn_ms: 350,
+            good_chance: (2, 5),
+            catch_width: 3,
+            player_step: 2,
+            needs_action: false,
+            miss_good_costs_life: false,
+            combo: false,
+            recipe: false,
+            shield: true,
+            player: "[C]",
+            good: "+",
+            bad: "O",
+            help: "Supplies repair shields; stones crack them",
+        },
+        CatchKind::Potion => CatchRules {
+            mechanic: "three-step-potion-recipe",
+            target: 12,
+            speed: 0.46,
+            spawn_ms: 460,
+            good_chance: (2, 3),
+            catch_width: 2,
+            player_step: 2,
+            needs_action: false,
+            miss_good_costs_life: true,
+            combo: false,
+            recipe: true,
+            shield: false,
+            player: "[P]",
+            good: "!",
+            bad: "~",
+            help: "Keep the recipe chain alive; smoke resets it",
+        },
+        CatchKind::Poker => CatchRules {
+            mechanic: "draw-poker-hand",
+            target: 5,
+            speed: 0.0,
+            spawn_ms: 0,
+            good_chance: (0, 1),
+            catch_width: 0,
+            player_step: 0,
+            needs_action: false,
+            miss_good_costs_life: false,
+            combo: false,
+            recipe: false,
+            shield: false,
+            player: "[_]",
+            good: "*",
+            bad: "x",
+            help: "Draw a five-card hand",
+        },
+    }
 }
 
 fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
@@ -8211,15 +8949,20 @@ fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
         let mut score = 0u32;
         let mut caught = 0u32;
         let mut recipe = 0usize;
-        let target = catch_target(kind);
+        let mut streak = 1u32;
+        let mut shield = 3i32;
+        let rules = catch_rules(kind);
+        let target = rules.target + state.difficulty_index as u32;
         let mut last_spawn = Instant::now();
         while lives > 0 && caught < target {
             let frame = Instant::now();
             let mut action = false;
             while let Some(key) = read_key() {
                 match key {
-                    Key::Left | Key::Char('a') => player_x = (player_x - 2).max(2),
-                    Key::Right | Key::Char('d') => player_x = (player_x + 2).min(w - 3),
+                    Key::Left | Key::Char('a') => player_x = (player_x - rules.player_step).max(2),
+                    Key::Right | Key::Char('d') => {
+                        player_x = (player_x + rules.player_step).min(w - 3)
+                    }
                     Key::Enter | Key::Space => action = true,
                     _ if is_pause(key) => {
                         if pause_screen(state).is_none() {
@@ -8231,49 +8974,56 @@ fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
                 }
             }
             if last_spawn.elapsed()
-                >= Duration::from_millis((440.0 / state.difficulty().speed) as u64)
+                >= Duration::from_millis((rules.spawn_ms as f64 / state.difficulty().speed) as u64)
             {
-                let good_rate = if matches!(kind, CatchKind::Tennis | CatchKind::Cricket) {
-                    1
-                } else {
-                    2
-                };
-                let good = state.rng.chance(good_rate, 3);
+                let good = state.rng.chance(rules.good_chance.0, rules.good_chance.1);
                 objects.push((state.rng.range(2, w - 3), 1.0, good));
                 last_spawn = Instant::now();
             }
             for object in &mut objects {
-                object.1 += catch_speed(kind) * state.difficulty().speed;
+                object.1 += rules.speed * state.difficulty().speed;
             }
             let mut kept = Vec::new();
             for (x, y, good) in objects.into_iter() {
                 let oy = y.round() as i32;
-                let aligned = oy >= h - 2 && (x - player_x).abs() <= 2;
-                let needs_action = matches!(
-                    kind,
-                    CatchKind::Tennis | CatchKind::Cricket | CatchKind::Pinball
-                );
+                let aligned = oy >= h - 2 && (x - player_x).abs() <= rules.catch_width;
                 if oy >= h {
-                    if good && !matches!(kind, CatchKind::Pinball) {
+                    if good && rules.miss_good_costs_life {
                         lives -= 1;
+                        streak = 1;
                         play_sound(state, "alert");
                     }
                     continue;
                 }
-                if aligned && (!needs_action || action) {
+                if aligned && (!rules.needs_action || action) {
                     if good {
                         caught += 1;
-                        let recipe_bonus = if matches!(kind, CatchKind::Potion) {
+                        let recipe_bonus = if rules.recipe {
                             recipe = (recipe + 1) % 3;
                             10 + recipe as u32 * 5
                         } else {
                             0
                         };
-                        score += catch_value(kind) + recipe_bonus;
+                        let streak_bonus = if rules.combo {
+                            let bonus = streak.min(8);
+                            streak = (streak + 1).min(9);
+                            bonus * 3
+                        } else {
+                            0
+                        };
+                        if rules.shield {
+                            shield = (shield + 1).min(5);
+                        }
+                        score += catch_value(kind) + recipe_bonus + streak_bonus;
                         play_sound(state, "score");
                     } else {
-                        lives -= 1;
+                        if rules.shield && shield > 0 {
+                            shield -= 1;
+                        } else {
+                            lives -= 1;
+                        }
                         recipe = 0;
+                        streak = 1;
                         play_sound(state, "alert");
                     }
                 } else {
@@ -8283,6 +9033,7 @@ fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
             objects = kept;
             draw_micro_catch(
                 state, name, kind, w, h, player_x, &objects, lives, score, caught, target, recipe,
+                streak, shield,
             );
             sleep_frame(frame, state.difficulty().tick_ms);
         }
@@ -8302,42 +9053,12 @@ fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
     }
 }
 
-fn catch_target(kind: CatchKind) -> u32 {
-    match kind {
-        CatchKind::Pinball => 20,
-        CatchKind::Tennis | CatchKind::Cricket => 12,
-        _ => 14,
-    }
-}
-
-fn catch_speed(kind: CatchKind) -> f64 {
-    match kind {
-        CatchKind::Pinball => 0.62,
-        CatchKind::Tennis => 0.56,
-        _ => 0.42,
-    }
-}
-
 fn catch_value(kind: CatchKind) -> u32 {
     match kind {
         CatchKind::Pinball => 12,
         CatchKind::Tennis | CatchKind::Cricket => 24,
         CatchKind::Potion => 18,
         _ => 16,
-    }
-}
-
-fn catch_sprites(kind: CatchKind) -> (&'static str, &'static str, &'static str) {
-    match kind {
-        CatchKind::Glyph => ("{V}", "*", "x"),
-        CatchKind::Pinball => ("[=]", "o", "v"),
-        CatchKind::Tennis => ("[T]", "o", "F"),
-        CatchKind::Cricket => ("[C]", "o", "b"),
-        CatchKind::Alien => ("{O}", "@", "x"),
-        CatchKind::Astro => ("[F]", "%", "b"),
-        CatchKind::Castle => ("[C]", "+", "O"),
-        CatchKind::Potion => ("[P]", "!", "~"),
-        CatchKind::Poker => ("[_]", "*", "x"),
     }
 }
 
@@ -8354,21 +9075,24 @@ fn draw_micro_catch(
     caught: u32,
     target: u32,
     recipe: usize,
+    streak: u32,
+    shield: i32,
 ) {
     let (rows, cols) = terminal_size();
     let theme = state.theme().clone();
     let top = rows / 2 - h as usize / 2 + 1;
     let left = cols / 2 - w as usize / 2;
-    let (player, good, bad) = catch_sprites(kind);
-    let extra = if matches!(kind, CatchKind::Potion) {
+    let rules = catch_rules(kind);
+    let extra = if rules.recipe {
         format!("   Recipe step {}", recipe + 1)
-    } else if matches!(
-        kind,
-        CatchKind::Tennis | CatchKind::Cricket | CatchKind::Pinball
-    ) {
+    } else if rules.needs_action {
         "   Space times the hit".to_string()
+    } else if rules.combo {
+        format!("   Streak x{streak}")
+    } else if rules.shield {
+        format!("   Shield {shield}")
     } else {
-        String::new()
+        format!("   {}", rules.mechanic)
     };
     let mut buf = String::new();
     clear_buf(&mut buf, &theme);
@@ -8406,7 +9130,7 @@ fn draw_micro_catch(
             &mut buf,
             top + y.round().max(0.0) as usize,
             left + x as usize,
-            if is_good { good } else { bad },
+            if is_good { rules.good } else { rules.bad },
             &theme,
             if is_good { Role::Success } else { Role::Danger },
             true,
@@ -8415,11 +9139,20 @@ fn draw_micro_catch(
     put(
         &mut buf,
         top + h as usize - 2,
-        left + player_x as usize - player.len() / 2,
-        player,
+        left + player_x as usize - rules.player.len() / 2,
+        rules.player,
         &theme,
         Role::Secondary,
         true,
+    );
+    center(
+        &mut buf,
+        top + h as usize + 1,
+        rules.help,
+        &theme,
+        Role::Muted,
+        false,
+        cols,
     );
     flush(&buf);
 }
@@ -8507,32 +9240,109 @@ fn draw_poker_hand(state: &AppState, name: &str, hand: &[u8], draws: u32, messag
     flush(&buf);
 }
 
+#[derive(Clone, Copy)]
+struct AimRules {
+    mechanic: &'static str,
+    target: &'static str,
+    shots: u32,
+    aim_limit: i32,
+    power_min: i32,
+    power_max: i32,
+    ideal_power: i32,
+    wind_limit: i32,
+    target_drift: i32,
+    aim_weight: i32,
+    help: &'static str,
+}
+
+fn aim_rules(kind: AimKind) -> AimRules {
+    match kind {
+        AimKind::Basket => AimRules {
+            mechanic: "moving-hoop-arc-shot",
+            target: "(O)",
+            shots: 9,
+            aim_limit: 6,
+            power_min: 2,
+            power_max: 11,
+            ideal_power: 7,
+            wind_limit: 2,
+            target_drift: 3,
+            aim_weight: 1,
+            help: "A/D aim, W/S arc power; moving hoop changes lanes",
+        },
+        AimKind::Archery => AimRules {
+            mechanic: "bullseye-wind-compensation",
+            target: "<O>",
+            shots: 7,
+            aim_limit: 8,
+            power_min: 3,
+            power_max: 12,
+            ideal_power: 6,
+            wind_limit: 4,
+            target_drift: 1,
+            aim_weight: 2,
+            help: "Wind matters twice as much; power controls arrow drop",
+        },
+        AimKind::Curling => AimRules {
+            mechanic: "curling-weight-ice-read",
+            target: "((O))",
+            shots: 8,
+            aim_limit: 5,
+            power_min: 1,
+            power_max: 10,
+            ideal_power: 5,
+            wind_limit: 1,
+            target_drift: 4,
+            aim_weight: 1,
+            help: "A/D line, W/S weight; ice curl moves the house",
+        },
+    }
+}
+
 fn game_micro_aim(state: &mut AppState, name: &str, kind: AimKind) {
     if !require_size(state, 20, 58, name) {
         return;
     }
     loop {
+        let rules = aim_rules(kind);
         let mut aim = 0i32;
-        let mut power = 5i32;
+        let mut power = rules.ideal_power;
         let mut shots = 0u32;
         let mut score = 0u32;
-        let max_shots = 8u32;
-        let mut wind = state.rng.range(-2, 2);
-        while shots < max_shots {
-            draw_micro_aim(state, name, kind, aim, power, wind, shots, max_shots, score);
+        let mut wind = state.rng.range(-rules.wind_limit, rules.wind_limit);
+        let mut target_offset = state.rng.range(-rules.target_drift, rules.target_drift);
+        let mut ice_read = 0i32;
+        while shots < rules.shots {
+            draw_micro_aim(
+                state,
+                name,
+                kind,
+                aim,
+                power,
+                wind,
+                target_offset,
+                ice_read,
+                shots,
+                rules.shots,
+                score,
+            );
             if let Some(key) = wait_for_key() {
                 match key {
-                    Key::Left | Key::Char('a') => aim = (aim - 1).max(-5),
-                    Key::Right | Key::Char('d') => aim = (aim + 1).min(5),
-                    Key::Up | Key::Char('w') => power = (power + 1).min(10),
-                    Key::Down | Key::Char('s') => power = (power - 1).max(1),
+                    Key::Left | Key::Char('a') => aim = (aim - 1).max(-rules.aim_limit),
+                    Key::Right | Key::Char('d') => aim = (aim + 1).min(rules.aim_limit),
+                    Key::Up | Key::Char('w') => power = (power + 1).min(rules.power_max),
+                    Key::Down | Key::Char('s') => power = (power - 1).max(rules.power_min),
                     Key::Enter | Key::Space => {
-                        let ideal_power = match kind {
-                            AimKind::Basket => 7,
-                            AimKind::Archery => 6,
-                            AimKind::Curling => 5,
+                        let terrain = match kind {
+                            AimKind::Basket => target_offset,
+                            AimKind::Archery => wind,
+                            AimKind::Curling => {
+                                ice_read = state.rng.range(-2, 2);
+                                target_offset + ice_read
+                            }
                         };
-                        let error = (aim + wind).abs() + (power - ideal_power).abs();
+                        let error = ((aim + wind - terrain).abs() * rules.aim_weight)
+                            + (power - rules.ideal_power).abs();
                         let points = match error {
                             0 => 100,
                             1 => 60,
@@ -8542,7 +9352,8 @@ fn game_micro_aim(state: &mut AppState, name: &str, kind: AimKind) {
                         };
                         score += points;
                         shots += 1;
-                        wind = state.rng.range(-2, 2);
+                        wind = state.rng.range(-rules.wind_limit, rules.wind_limit);
+                        target_offset = state.rng.range(-rules.target_drift, rules.target_drift);
                         if points > 0 {
                             play_sound(state, "score");
                         } else {
@@ -8573,19 +9384,28 @@ fn draw_micro_aim(
     aim: i32,
     power: i32,
     wind: i32,
+    target_offset: i32,
+    ice_read: i32,
     shots: u32,
     max_shots: u32,
     score: u32,
 ) {
     let (_, cols) = terminal_size();
     let theme = state.theme().clone();
-    let target = match kind {
-        AimKind::Basket => "(O)",
-        AimKind::Archery => "<O>",
-        AimKind::Curling => "((O))",
+    let rules = aim_rules(kind);
+    let marker_left = (aim + rules.aim_limit) as usize;
+    let marker_right = (rules.aim_limit - aim) as usize;
+    let target_pad = (target_offset + rules.target_drift).max(0) as usize;
+    let terrain = match kind {
+        AimKind::Basket => format!("Hoop lane {target_offset:+}   {}", rules.mechanic),
+        AimKind::Archery => format!("Wind compensation {wind:+}   {}", rules.mechanic),
+        AimKind::Curling => {
+            format!(
+                "House {target_offset:+}   Ice curl {ice_read:+}   {}",
+                rules.mechanic
+            )
+        }
     };
-    let marker_left = (aim + 5) as usize;
-    let marker_right = (5 - aim) as usize;
     let mut buf = String::new();
     clear_buf(&mut buf, &theme);
     center(
@@ -8606,10 +9426,19 @@ fn draw_micro_aim(
         false,
         cols,
     );
-    center(&mut buf, 9, target, &theme, Role::Success, true, cols);
+    center(&mut buf, 8, &terrain, &theme, Role::Secondary, true, cols);
     center(
         &mut buf,
-        12,
+        10,
+        &format!("{}{}", " ".repeat(target_pad), rules.target),
+        &theme,
+        Role::Success,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        13,
         &format!(
             "Aim: {}^{}",
             " ".repeat(marker_left),
@@ -8620,46 +9449,94 @@ fn draw_micro_aim(
         true,
         cols,
     );
-    center(
-        &mut buf,
-        16,
-        if matches!(kind, AimKind::Curling) {
-            "A/D aim   W/S weight   Space slides"
-        } else {
-            "A/D aim   W/S power   Space shoots"
-        },
-        &theme,
-        Role::Muted,
-        false,
-        cols,
-    );
+    center(&mut buf, 17, rules.help, &theme, Role::Muted, false, cols);
     flush(&buf);
+}
+
+const FACTORY_KEYS: [char; 4] = ['w', 'a', 's', 'd'];
+const DUEL_KEYS: [char; 4] = ['w', 'a', 's', 'd'];
+const TRICK_KEYS: [char; 4] = ['a', 'd', 'w', 's'];
+
+#[derive(Clone, Copy)]
+struct SequenceRules {
+    mechanic: &'static str,
+    label: &'static str,
+    keys: &'static [char],
+    base_len: usize,
+    mistakes_allowed: u32,
+    reset_on_miss: bool,
+    step_back_on_miss: bool,
+    bonus_per_step: u32,
+    help: &'static str,
+}
+
+fn sequence_rules(kind: SequenceKind, difficulty_index: usize) -> SequenceRules {
+    let extra = difficulty_index * 2;
+    match kind {
+        SequenceKind::Factory => SequenceRules {
+            mechanic: "assembly-queue-no-reset",
+            label: "Assemble the recipe",
+            keys: &FACTORY_KEYS,
+            base_len: 5 + extra,
+            mistakes_allowed: 4,
+            reset_on_miss: false,
+            step_back_on_miss: false,
+            bonus_per_step: 45,
+            help: "Wrong inputs waste parts, but the belt keeps moving",
+        },
+        SequenceKind::Duel => SequenceRules {
+            mechanic: "spell-chain-hard-reset",
+            label: "Counter the spell chain",
+            keys: &DUEL_KEYS,
+            base_len: 4 + extra,
+            mistakes_allowed: 2,
+            reset_on_miss: true,
+            step_back_on_miss: false,
+            bonus_per_step: 70,
+            help: "A miss breaks the ward and restarts the spell",
+        },
+        SequenceKind::Trick => SequenceRules {
+            mechanic: "skate-combo-stepback",
+            label: "Land the trick combo",
+            keys: &TRICK_KEYS,
+            base_len: 6 + extra,
+            mistakes_allowed: 3,
+            reset_on_miss: false,
+            step_back_on_miss: true,
+            bonus_per_step: 55,
+            help: "A wobble drops one trick from the combo",
+        },
+    }
 }
 
 fn game_micro_sequence(state: &mut AppState, name: &str, kind: SequenceKind) {
     loop {
-        let keys = ['w', 'a', 's', 'd'];
-        let target_len = match state.difficulty_index {
-            0 => 5,
-            1 => 7,
-            _ => 9,
-        };
+        let rules = sequence_rules(kind, state.difficulty_index);
+        let target_len = rules.base_len;
         let mut sequence = Vec::new();
         for _ in 0..target_len {
-            sequence.push(keys[state.rng.usize(keys.len())]);
+            sequence.push(rules.keys[state.rng.usize(rules.keys.len())]);
         }
         let mut index = 0usize;
         let mut mistakes = 0u32;
-        while index < sequence.len() && mistakes < 4 {
+        let mut chain = 0u32;
+        while index < sequence.len() && mistakes < rules.mistakes_allowed {
             draw_micro_sequence(state, name, kind, &sequence, index, mistakes);
             if let Some(key) = wait_for_key() {
                 match key {
                     Key::Char(ch) if ['w', 'a', 's', 'd'].contains(&ch) => {
                         if ch == sequence[index] {
                             index += 1;
+                            chain += 1;
                             play_sound(state, "score");
                         } else {
                             mistakes += 1;
+                            chain = 0;
+                            if rules.reset_on_miss {
+                                index = 0;
+                            } else if rules.step_back_on_miss && index > 0 {
+                                index -= 1;
+                            }
                             play_sound(state, "alert");
                         }
                     }
@@ -8674,9 +9551,11 @@ fn game_micro_sequence(state: &mut AppState, name: &str, kind: SequenceKind) {
             }
         }
         let score = if index == sequence.len() {
-            600u32.saturating_sub(mistakes * 60)
+            500u32
+                .saturating_add(chain * rules.bonus_per_step)
+                .saturating_sub(mistakes * 80)
         } else {
-            index as u32 * 40
+            index as u32 * rules.bonus_per_step
         };
         record_score(state, name, score);
         if !wait_menu(
@@ -8703,11 +9582,8 @@ fn draw_micro_sequence(
 ) {
     let (_, cols) = terminal_size();
     let theme = state.theme().clone();
-    let label = match kind {
-        SequenceKind::Factory => "Assemble the recipe",
-        SequenceKind::Duel => "Cast the spell chain",
-        SequenceKind::Trick => "Land the trick combo",
-    };
+    let rules = sequence_rules(kind, 1);
+    let label = rules.label;
     let shown = sequence
         .iter()
         .enumerate()
@@ -8731,21 +9607,31 @@ fn draw_micro_sequence(
         true,
         cols,
     );
-    center(&mut buf, 7, label, &theme, Role::Accent, false, cols);
+    center(
+        &mut buf,
+        7,
+        &format!("{label}   {}", rules.mechanic),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
     center(&mut buf, 11, &shown, &theme, Role::Success, true, cols);
     center(
         &mut buf,
         15,
         &format!(
-            "Step {}/{}   Mistakes {mistakes}/4",
+            "Step {}/{}   Mistakes {mistakes}/{}",
             index + 1,
-            sequence.len()
+            sequence.len(),
+            rules.mistakes_allowed
         ),
         &theme,
         Role::Secondary,
         true,
         cols,
     );
+    center(&mut buf, 17, rules.help, &theme, Role::Muted, false, cols);
     flush(&buf);
 }
 
@@ -10065,6 +10951,182 @@ fn game_block_drop(state: &mut AppState) {
     falling_game(state, "Block Drop", "[_]", Some("[]"), "XX", 10, false);
 }
 
+#[derive(Clone, Copy)]
+struct FallingRules {
+    mechanic: &'static str,
+    spawn_ms: u64,
+    fall_speed: f64,
+    good_chance: (u32, u32),
+    horizontal_step: i32,
+    vertical_step: i32,
+    catch_width: i32,
+    combo_cap: u32,
+    cargo_goal_base: Option<i32>,
+    oxygen_mode: bool,
+    wind_period: u32,
+    missed_good_penalty: u32,
+    help: &'static str,
+}
+
+fn falling_rules(name: &str, difficulty_index: usize) -> FallingRules {
+    match name {
+        "Meteor Dodge" => FallingRules {
+            mechanic: "freeflight-survival-meteors",
+            spawn_ms: 420,
+            fall_speed: 0.31,
+            good_chance: (0, 1),
+            horizontal_step: 2,
+            vertical_step: 1,
+            catch_width: 2,
+            combo_cap: 1,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 0,
+            help: "Free-fly and survive the meteor shower",
+        },
+        "Star Catcher" => FallingRules {
+            mechanic: "bottom-star-bomb-catch",
+            spawn_ms: 480,
+            fall_speed: 0.28,
+            good_chance: (2, 5),
+            horizontal_step: 3,
+            vertical_step: 0,
+            catch_width: 2,
+            combo_cap: 1,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 5,
+            help: "Bottom catcher: stars score, missed stars sting",
+        },
+        "Block Drop" => FallingRules {
+            mechanic: "wide-bucket-cracked-crates",
+            spawn_ms: 450,
+            fall_speed: 0.34,
+            good_chance: (1, 2),
+            horizontal_step: 2,
+            vertical_step: 0,
+            catch_width: 3,
+            combo_cap: 1,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 2,
+            help: "Wide bucket, heavier cracked blocks",
+        },
+        "Comet Catcher" => FallingRules {
+            mechanic: "high-combo-comet-shower",
+            spawn_ms: 360,
+            fall_speed: 0.38,
+            good_chance: (1, 3),
+            horizontal_step: 2,
+            vertical_step: 1,
+            catch_width: 2,
+            combo_cap: 9,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 7,
+            help: "Free-fly catches stack a comet combo",
+        },
+        "Cargo Catch" => FallingRules {
+            mechanic: "quota-loader-bottom-bucket",
+            spawn_ms: 390,
+            fall_speed: 0.32,
+            good_chance: (1, 2),
+            horizontal_step: 2,
+            vertical_step: 0,
+            catch_width: 3,
+            combo_cap: 1,
+            cargo_goal_base: Some(match difficulty_index {
+                0 => 8,
+                1 => 11,
+                _ => 14,
+            }),
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 4,
+            help: "Load the quota before cracked cargo breaks you",
+        },
+        "Gem Rush" => FallingRules {
+            mechanic: "tight-gem-chain-rush",
+            spawn_ms: 320,
+            fall_speed: 0.45,
+            good_chance: (2, 5),
+            horizontal_step: 2,
+            vertical_step: 0,
+            catch_width: 1,
+            combo_cap: 12,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 8,
+            help: "Narrow bucket, fast gems, brutal combo resets",
+        },
+        "Pearl Diver" => FallingRules {
+            mechanic: "oxygen-dive-free-swim",
+            spawn_ms: 440,
+            fall_speed: 0.29,
+            good_chance: (1, 3),
+            horizontal_step: 2,
+            vertical_step: 1,
+            catch_width: 2,
+            combo_cap: 1,
+            cargo_goal_base: None,
+            oxygen_mode: true,
+            wind_period: 0,
+            missed_good_penalty: 0,
+            help: "Free-swim for pearls; oxygen is the real timer",
+        },
+        "Data Storm" => FallingRules {
+            mechanic: "narrow-data-packet-streaks",
+            spawn_ms: 290,
+            fall_speed: 0.48,
+            good_chance: (1, 2),
+            horizontal_step: 1,
+            vertical_step: 0,
+            catch_width: 1,
+            combo_cap: 6,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 10,
+            help: "Tiny moves, fast packets, errors break streaks",
+        },
+        "Rain Runner" => FallingRules {
+            mechanic: "windy-umbrella-rain-combo",
+            spawn_ms: 370,
+            fall_speed: 0.37,
+            good_chance: (2, 5),
+            horizontal_step: 2,
+            vertical_step: 0,
+            catch_width: 4,
+            combo_cap: 5,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 7,
+            missed_good_penalty: 3,
+            help: "Wide umbrella, gusts shove you sideways",
+        },
+        _ => FallingRules {
+            mechanic: "fallback-falling",
+            spawn_ms: 520,
+            fall_speed: 0.25,
+            good_chance: (2, 5),
+            horizontal_step: 2,
+            vertical_step: 1,
+            catch_width: 2,
+            combo_cap: 1,
+            cargo_goal_base: None,
+            oxygen_mode: false,
+            wind_period: 0,
+            missed_good_penalty: 3,
+            help: "Catch good objects and dodge hazards",
+        },
+    }
+}
+
 fn falling_game(
     state: &mut AppState,
     name: &str,
@@ -10077,20 +11139,13 @@ fn falling_game(
     if !require_size(state, 22, 62, name) {
         return;
     }
+    let rules = falling_rules(name, state.difficulty_index);
     let combo_mode = matches!(
         name,
         "Comet Catcher" | "Gem Rush" | "Data Storm" | "Rain Runner"
     );
-    let cargo_goal = if name == "Cargo Catch" {
-        Some(match state.difficulty_index {
-            0 => 8,
-            1 => 11,
-            _ => 14,
-        })
-    } else {
-        None
-    };
-    let oxygen_mode = name == "Pearl Diver";
+    let cargo_goal = rules.cargo_goal_base;
+    let oxygen_mode = rules.oxygen_mode;
     loop {
         let (board_w, board_h) = full_board(52, 17, 132, 38);
         let mut player = (board_w / 2, board_h - 2);
@@ -10101,16 +11156,25 @@ fn falling_game(
         let mut cargo = 0i32;
         let mut oxygen = 100i32;
         let mut completed = false;
+        let mut tick = 0u32;
         let mut last_spawn = Instant::now();
         let mut oxygen_tick = Instant::now();
         while lives > 0 && !completed {
             let frame = Instant::now();
             while let Some(key) = read_key() {
                 match key {
-                    Key::Left | Key::Char('a') => player.0 = (player.0 - 2).max(1),
-                    Key::Right | Key::Char('d') => player.0 = (player.0 + 2).min(board_w - 3),
-                    Key::Up | Key::Char('w') => player.1 = (player.1 - 1).max(1),
-                    Key::Down | Key::Char('s') => player.1 = (player.1 + 1).min(board_h - 2),
+                    Key::Left | Key::Char('a') => {
+                        player.0 = (player.0 - rules.horizontal_step).max(1)
+                    }
+                    Key::Right | Key::Char('d') => {
+                        player.0 = (player.0 + rules.horizontal_step).min(board_w - 3)
+                    }
+                    Key::Up | Key::Char('w') if rules.vertical_step > 0 => {
+                        player.1 = (player.1 - rules.vertical_step).max(1)
+                    }
+                    Key::Down | Key::Char('s') if rules.vertical_step > 0 => {
+                        player.1 = (player.1 + rules.vertical_step).min(board_h - 2)
+                    }
                     _ if is_pause(key) => {
                         if pause_screen(state).is_none() {
                             return;
@@ -10120,10 +11184,20 @@ fn falling_game(
                     _ => {}
                 }
             }
+            tick += 1;
+            if rules.wind_period > 0 && tick % rules.wind_period == 0 {
+                let push = if (tick / rules.wind_period) % 2 == 0 {
+                    1
+                } else {
+                    -1
+                };
+                player.0 = (player.0 + push).clamp(1, board_w - 3);
+            }
             if last_spawn.elapsed()
-                >= Duration::from_millis((520.0 / state.difficulty().speed) as u64)
+                >= Duration::from_millis((rules.spawn_ms as f64 / state.difficulty().speed) as u64)
             {
-                let good = good_sprite.is_some() && state.rng.chance(2, 5);
+                let good = good_sprite.is_some()
+                    && state.rng.chance(rules.good_chance.0, rules.good_chance.1);
                 objects.push((state.rng.range(2, board_w - 4), 1.0, good));
                 if state.difficulty_index > 0 && state.rng.chance(1, 5) {
                     objects.push((state.rng.range(2, board_w - 4), 1.0, false));
@@ -10131,7 +11205,7 @@ fn falling_game(
                 last_spawn = Instant::now();
             }
             for object in &mut objects {
-                object.1 += 0.25 * state.difficulty().speed;
+                object.1 += rules.fall_speed * state.difficulty().speed;
             }
             if oxygen_mode && oxygen_tick.elapsed() >= Duration::from_millis(350) {
                 oxygen -= 1 + state.difficulty_index as i32;
@@ -10147,7 +11221,7 @@ fn falling_game(
                 let oy = object.1.round() as i32;
                 if oy >= board_h {
                     if object.2 && !survival_score {
-                        score = score.saturating_sub(3);
+                        score = score.saturating_sub(rules.missed_good_penalty);
                         if combo_mode {
                             combo = 1;
                         }
@@ -10157,7 +11231,7 @@ fn falling_game(
                     }
                     continue;
                 }
-                if oy == player.1 && (object.0 - player.0).abs() <= 2 {
+                if oy == player.1 && (object.0 - player.0).abs() <= rules.catch_width {
                     if object.2 {
                         if let Some(goal) = cargo_goal {
                             cargo += 1;
@@ -10171,7 +11245,7 @@ fn falling_game(
                             score += good_value;
                         } else if combo_mode {
                             score += good_value * combo;
-                            combo = (combo + 1).min(9);
+                            combo = (combo + 1).min(rules.combo_cap.max(1));
                         } else {
                             score += good_value;
                         }
@@ -10198,8 +11272,10 @@ fn falling_game(
                 format!("O2 {oxygen}")
             } else if combo_mode {
                 format!("Combo x{combo}")
+            } else if survival_score {
+                rules.mechanic.to_string()
             } else {
-                String::new()
+                rules.help.to_string()
             };
             draw_falling(
                 state,
@@ -10629,6 +11705,156 @@ fn draw_flappy(
     flush(&buf);
 }
 
+#[derive(Clone, Copy)]
+struct ScrollRules {
+    mechanic: &'static str,
+    spawn_ms: u64,
+    scroll_speed: f64,
+    good_chance: (u32, u32),
+    collision_x: i32,
+    collision_y: i32,
+    fuel_drain_period: u32,
+    near_miss_score: u32,
+    drone_shield: bool,
+    vertical_wobble: bool,
+    help: &'static str,
+}
+
+fn scroll_rules(name: &str) -> ScrollRules {
+    match name {
+        "Asteroid Belt" => ScrollRules {
+            mechanic: "pure-asteroid-threading",
+            spawn_ms: 410,
+            scroll_speed: 0.66,
+            good_chance: (0, 1),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 0,
+            near_miss_score: 6,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Thread rocks for near-miss points",
+        },
+        "River Raid" => ScrollRules {
+            mechanic: "fuel-river-raid",
+            spawn_ms: 440,
+            scroll_speed: 0.62,
+            good_chance: (1, 4),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 1,
+            near_miss_score: 4,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Fuel pickups keep the river run alive",
+        },
+        "Neon Drift" => ScrollRules {
+            mechanic: "momentum-heat-drift",
+            spawn_ms: 380,
+            scroll_speed: 0.70,
+            good_chance: (1, 4),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 1,
+            near_miss_score: 7,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Drift builds heat; boosts cool the engine",
+        },
+        "Drone Dodge" => ScrollRules {
+            mechanic: "shielded-wobble-clouds",
+            spawn_ms: 360,
+            scroll_speed: 0.58,
+            good_chance: (0, 1),
+            collision_x: 1,
+            collision_y: 1,
+            fuel_drain_period: 0,
+            near_miss_score: 9,
+            drone_shield: true,
+            vertical_wobble: true,
+            help: "Small drone, drifting clouds, shield absorbs hits",
+        },
+        "Solar Sailer" => ScrollRules {
+            mechanic: "solar-charge-fuel-economy",
+            spawn_ms: 430,
+            scroll_speed: 0.58,
+            good_chance: (1, 3),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 2,
+            near_miss_score: 5,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Charge slows fuel drain and boosts scoring",
+        },
+        "Fuel Run" => ScrollRules {
+            mechanic: "tight-fuel-slalom",
+            spawn_ms: 350,
+            scroll_speed: 0.74,
+            good_chance: (1, 5),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 1,
+            near_miss_score: 8,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Fast route, scarce fuel, high near-miss score",
+        },
+        "Spark Chase" => ScrollRules {
+            mechanic: "spark-collection-weave",
+            spawn_ms: 330,
+            scroll_speed: 0.69,
+            good_chance: (1, 3),
+            collision_x: 1,
+            collision_y: 1,
+            fuel_drain_period: 2,
+            near_miss_score: 6,
+            drone_shield: false,
+            vertical_wobble: true,
+            help: "Sparks wobble; weave through for charge",
+        },
+        "Orbital Courier" => ScrollRules {
+            mechanic: "delivery-quota-route",
+            spawn_ms: 410,
+            scroll_speed: 0.64,
+            good_chance: (1, 3),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 1,
+            near_miss_score: 5,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Hit packet quota for a route completion bonus",
+        },
+        "Storm Surge" => ScrollRules {
+            mechanic: "current-pushed-surf",
+            spawn_ms: 390,
+            scroll_speed: 0.78,
+            good_chance: (1, 4),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 1,
+            near_miss_score: 6,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "The current shoves you while fuel drains",
+        },
+        _ => ScrollRules {
+            mechanic: "fallback-scroll",
+            spawn_ms: 430,
+            scroll_speed: 0.64,
+            good_chance: (1, 4),
+            collision_x: 2,
+            collision_y: 1,
+            fuel_drain_period: 1,
+            near_miss_score: 5,
+            drone_shield: false,
+            vertical_wobble: false,
+            help: "Dodge hazards and grab supplies",
+        },
+    }
+}
+
 fn game_side_scroll(
     state: &mut AppState,
     name: &str,
@@ -10640,6 +11866,7 @@ fn game_side_scroll(
     if !require_size(state, 22, 64, name) {
         return;
     }
+    let rules = scroll_rules(name);
     let drift_mode = name == "Neon Drift";
     let solar_mode = name == "Solar Sailer";
     let storm_mode = name == "Storm Surge";
@@ -10664,6 +11891,7 @@ fn game_side_scroll(
         let mut deliveries = 0i32;
         let mut drift_y = 0i32;
         let mut current_clock = 0i32;
+        let mut shield = if rules.drone_shield { 2 } else { 0 };
         let mut completed = false;
         let mut last_spawn = Instant::now();
         while lives > 0 && fuel > 0 && !completed {
@@ -10725,36 +11953,45 @@ fn game_side_scroll(
                 player.1 = (player.1 + push).clamp(1, board_h - 2);
             }
             if last_spawn.elapsed()
-                >= Duration::from_millis((430.0 / state.difficulty().speed) as u64)
+                >= Duration::from_millis((rules.spawn_ms as f64 / state.difficulty().speed) as u64)
             {
                 let good = if good_sprite.is_none() {
                     false
                 } else if courier_goal.is_some() || solar_mode {
-                    state.rng.chance(1, 3)
+                    state.rng.chance(rules.good_chance.0, rules.good_chance.1)
                 } else {
-                    state.rng.chance(1, 4)
+                    state.rng.chance(rules.good_chance.0, rules.good_chance.1)
                 };
                 objects.push((board_w as f64 - 2.0, state.rng.range(1, board_h - 2), good));
                 last_spawn = Instant::now();
             }
             for object in &mut objects {
-                let scroll_speed = if storm_mode { 0.76 } else { 0.64 };
-                object.0 -= scroll_speed * state.difficulty().speed;
+                object.0 -= rules.scroll_speed * state.difficulty().speed;
+                if rules.vertical_wobble && current_clock % 5 == 0 {
+                    let wobble = if (object.0.round() as i32 + current_clock) % 2 == 0 {
+                        1
+                    } else {
+                        -1
+                    };
+                    object.1 = (object.1 + wobble).clamp(1, board_h - 2);
+                }
             }
             let mut kept = Vec::new();
             for object in objects.into_iter() {
                 let ox = object.0.round() as i32;
                 if ox < 1 {
                     if !object.2 {
-                        score += if (object.1 - player.1).abs() <= 1 {
-                            10
+                        score += if (object.1 - player.1).abs() <= rules.collision_y + 1 {
+                            rules.near_miss_score
                         } else {
-                            5
+                            rules.near_miss_score / 2
                         };
                     }
                     continue;
                 }
-                if (ox - player.0).abs() <= 2 && (object.1 - player.1).abs() <= 1 {
+                if (ox - player.0).abs() <= rules.collision_x
+                    && (object.1 - player.1).abs() <= rules.collision_y
+                {
                     if object.2 {
                         if let Some(goal) = courier_goal {
                             deliveries += 1;
@@ -10778,7 +12015,11 @@ fn game_side_scroll(
                         }
                         play_sound(state, "score");
                     } else {
-                        lives -= 1;
+                        if shield > 0 {
+                            shield -= 1;
+                        } else {
+                            lives -= 1;
+                        }
                         if drift_mode {
                             heat = (heat + 25).min(120);
                         }
@@ -10796,7 +12037,11 @@ fn game_side_scroll(
             if solar_mode && current_clock % 5 == 0 {
                 charge = (charge - 1).max(0);
             }
-            fuel -= if good_sprite.is_some() && !(solar_mode && charge >= 85) {
+            fuel -= if good_sprite.is_some()
+                && rules.fuel_drain_period > 0
+                && current_clock % rules.fuel_drain_period as i32 == 0
+                && !(solar_mode && charge >= 85)
+            {
                 1
             } else {
                 0
@@ -10814,8 +12059,10 @@ fn game_side_scroll(
                     "down"
                 };
                 format!("Current {dir}")
+            } else if rules.drone_shield {
+                format!("Shield {shield}   {}", rules.mechanic)
             } else {
-                String::new()
+                rules.help.to_string()
             };
             draw_side_scroll(
                 state,
@@ -11808,10 +13055,163 @@ fn game_circuit(state: &mut AppState) {
     grid_exit_game(state, "Circuit Trace", false, true);
 }
 
+#[derive(Clone, Copy)]
+struct GridRules {
+    mechanic: &'static str,
+    mine_count: usize,
+    ordered_count: i32,
+    wanted_items: usize,
+    lives: i32,
+    bomb_defuse: bool,
+    meltdown_steps: i32,
+    moving_traps: bool,
+    item_sprite: &'static str,
+}
+
+fn grid_rules(name: &str, difficulty_index: usize) -> GridRules {
+    let difficulty = difficulty_index as i32;
+    match name {
+        "Minefield" => GridRules {
+            mechanic: "hidden-mines-one-life-scanner",
+            mine_count: match difficulty_index {
+                0 => 14,
+                1 => 22,
+                _ => 32,
+            },
+            ordered_count: 0,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Bomb Sweeper" => GridRules {
+            mechanic: "adjacent-bomb-defuse-scanner",
+            mine_count: match difficulty_index {
+                0 => 18,
+                1 => 26,
+                _ => 36,
+            },
+            ordered_count: 0,
+            wanted_items: 0,
+            lives: 2,
+            bomb_defuse: true,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Maze Runner" => GridRules {
+            mechanic: "plain-route-maze",
+            mine_count: 0,
+            ordered_count: 0,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Circuit Trace" => GridRules {
+            mechanic: "five-node-circuit-order",
+            mine_count: 0,
+            ordered_count: 5,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Trap Runner" => GridRules {
+            mechanic: "moving-visible-trap-grid",
+            mine_count: 12 + difficulty_index * 4,
+            ordered_count: 0,
+            wanted_items: 0,
+            lives: 3 + (2 - difficulty.min(2)),
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: true,
+            item_sprite: "",
+        },
+        "Reactor Trace" => GridRules {
+            mechanic: "reactor-countdown-node-route",
+            mine_count: 0,
+            ordered_count: 6,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 95 - difficulty * 15,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Vault Escape" => GridRules {
+            mechanic: "three-key-locked-vault",
+            mine_count: 0,
+            ordered_count: 0,
+            wanted_items: 3,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "K",
+        },
+        "Ice Slide" => GridRules {
+            mechanic: "ice-slide-stop-maze",
+            mine_count: 0,
+            ordered_count: 0,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Signal Trace" => GridRules {
+            mechanic: "seven-node-signal-long-route",
+            mine_count: 0,
+            ordered_count: 7,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+        "Crystal Cavern" => GridRules {
+            mechanic: "many-crystal-cavern-sweep",
+            mine_count: 0,
+            ordered_count: 0,
+            wanted_items: match difficulty_index {
+                0 => 6,
+                1 => 8,
+                _ => 10,
+            },
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "*",
+        },
+        _ => GridRules {
+            mechanic: "fallback-grid-exit",
+            mine_count: 0,
+            ordered_count: 0,
+            wanted_items: 0,
+            lives: 1,
+            bomb_defuse: false,
+            meltdown_steps: 0,
+            moving_traps: false,
+            item_sprite: "",
+        },
+    }
+}
+
 fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_nodes: bool) {
     if !require_size(state, 22, 62, name) {
         return;
     }
+    let rules = grid_rules(name, state.difficulty_index);
     let trap_mode = name == "Trap Runner";
     let vault_mode = name == "Vault Escape";
     let ice_mode = name == "Ice Slide";
@@ -11826,22 +13226,13 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
             make_maze(state, w, h, player, goal)
         };
         let mut mines = if mines_mode {
-            random_points(
-                state,
-                w,
-                h,
-                match state.difficulty_index {
-                    0 => 14,
-                    1 => 22,
-                    _ => 32,
-                },
-            )
+            random_points(state, w, h, rules.mine_count)
         } else {
             HashSet::new()
         };
         let mut nodes = Vec::new();
         if ordered_nodes {
-            for i in 0..5 {
+            for i in 0..rules.ordered_count {
                 loop {
                     let point = (state.rng.range(4, w - 5), state.rng.range(3, h - 4));
                     if !walls.contains(&point) && point != player && point != goal {
@@ -11852,39 +13243,20 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
             }
         }
         let mut items = HashSet::new();
-        let wanted_items = if vault_mode {
-            3
-        } else if crystal_mode {
-            match state.difficulty_index {
-                0 => 6,
-                1 => 8,
-                _ => 10,
-            }
-        } else {
-            0
-        };
+        let wanted_items = rules.wanted_items;
         while items.len() < wanted_items {
             let point = (state.rng.range(2, w - 3), state.rng.range(2, h - 3));
             if !walls.contains(&point) && point != player && point != goal {
                 items.insert(point);
             }
         }
-        let item_sprite = if vault_mode {
-            "K"
-        } else if crystal_mode {
-            "*"
-        } else {
-            ""
-        };
+        let item_sprite = rules.item_sprite;
         let mut next_node = 1;
         let mut steps = 0u32;
         let mut bonus = 0u32;
-        let mut lives = if trap_mode {
-            state.difficulty().lives
-        } else {
-            1
-        };
-        let mut status = "Find the exit.".to_string();
+        let mut lives = rules.lives;
+        let mut meltdown = rules.meltdown_steps;
+        let mut status = format!("Find the exit. [{}]", rules.mechanic);
         let mut won = false;
         let mut lost = false;
         while !won && !lost {
@@ -11893,6 +13265,24 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
                 if is_pause(key) {
                     if pause_screen(state).is_none() {
                         return;
+                    }
+                    continue;
+                }
+                if rules.bomb_defuse && matches!(key, Key::Enter | Key::Space) {
+                    let mut defused = None;
+                    for &mine in &mines {
+                        if (mine.0 - player.0).abs() <= 1 && (mine.1 - player.1).abs() <= 1 {
+                            defused = Some(mine);
+                            break;
+                        }
+                    }
+                    if let Some(mine) = defused {
+                        mines.remove(&mine);
+                        bonus += 40;
+                        status = "Bomb defused.".to_string();
+                        play_sound(state, "score");
+                    } else {
+                        status = "No adjacent bomb to defuse.".to_string();
                     }
                     continue;
                 }
@@ -11934,11 +13324,14 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
                         {
                             player = next;
                             steps += 1;
+                            if meltdown > 0 {
+                                meltdown -= 1;
+                            }
                         }
                     }
                 }
             }
-            if trap_mode {
+            if rules.moving_traps {
                 let mut moved_traps = HashSet::new();
                 for &trap in &mines {
                     let choices = [
@@ -11972,6 +13365,16 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
                         player = (1, h - 2);
                         status = format!("Trap hit. Lives {lives}.");
                     }
+                } else if rules.bomb_defuse {
+                    lives -= 1;
+                    mines.remove(&player);
+                    if lives <= 0 {
+                        lost = true;
+                        status = "Bomb blast ended the sweep.".to_string();
+                    } else {
+                        player = (1, h - 2);
+                        status = format!("Bomb blast. Lives {lives}; keep sweeping.");
+                    }
                 } else {
                     lost = true;
                     status = "Boom. Hidden mine.".to_string();
@@ -11987,8 +13390,18 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
                     next_node += 1;
                     play_sound(state, "score");
                 }
-                status = format!("Trace node {next_node}, then exit.");
-                if player == goal && next_node <= 5 {
+                if meltdown > 0 {
+                    status = format!("Trace node {next_node}. Meltdown in {meltdown}.");
+                } else if rules.meltdown_steps > 0 {
+                    lost = true;
+                    status = "Reactor meltdown. Route failed.".to_string();
+                    play_sound(state, "alert");
+                } else if name == "Signal Trace" {
+                    status = format!("Trace long signal node {next_node}, then exit.");
+                } else {
+                    status = format!("Trace node {next_node}, then exit.");
+                }
+                if player == goal && next_node <= rules.ordered_count {
                     status = "Need all nodes first.".to_string();
                 }
             } else if mines_mode && !lost {
@@ -11998,6 +13411,8 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
                     .count();
                 if trap_mode {
                     status = format!("Lives {lives}. Moving traps nearby: {nearby}.");
+                } else if rules.bomb_defuse {
+                    status = format!("Scanner: {nearby} bomb(s) nearby. Space defuses adjacent.");
                 } else {
                     status = format!("Scanner: {nearby} mine(s) nearby.");
                 }
@@ -12015,7 +13430,7 @@ fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_no
                 status = "Sliding. Pick a direction and ride it out.".to_string();
             }
             if player == goal
-                && (!ordered_nodes || next_node > 5)
+                && (!ordered_nodes || next_node > rules.ordered_count)
                 && (!vault_mode || items.is_empty())
                 && (!crystal_mode || items.is_empty())
             {
@@ -12220,7 +13635,8 @@ fn draw_grid_exit(
                 true,
             );
         }
-    } else if mines.is_empty() {
+    }
+    if mines.is_empty() {
         put(
             &mut buf,
             top + goal.1 as usize,
@@ -12230,8 +13646,7 @@ fn draw_grid_exit(
             Role::Success,
             true,
         );
-    }
-    if !mines.is_empty() {
+    } else {
         put(
             &mut buf,
             top + goal.1 as usize,
@@ -13519,6 +14934,111 @@ mod tests {
         }
     }
 
+    #[test]
+    fn shared_engine_rule_profiles_are_distinct() {
+        assert_distinct(
+            "falling profile",
+            &[
+                falling_rules("Meteor Dodge", 1).mechanic,
+                falling_rules("Star Catcher", 1).mechanic,
+                falling_rules("Block Drop", 1).mechanic,
+                falling_rules("Comet Catcher", 1).mechanic,
+                falling_rules("Cargo Catch", 1).mechanic,
+                falling_rules("Gem Rush", 1).mechanic,
+                falling_rules("Pearl Diver", 1).mechanic,
+                falling_rules("Data Storm", 1).mechanic,
+                falling_rules("Rain Runner", 1).mechanic,
+            ],
+        );
+        assert_distinct(
+            "scroll profile",
+            &[
+                scroll_rules("Asteroid Belt").mechanic,
+                scroll_rules("River Raid").mechanic,
+                scroll_rules("Neon Drift").mechanic,
+                scroll_rules("Drone Dodge").mechanic,
+                scroll_rules("Solar Sailer").mechanic,
+                scroll_rules("Fuel Run").mechanic,
+                scroll_rules("Spark Chase").mechanic,
+                scroll_rules("Orbital Courier").mechanic,
+                scroll_rules("Storm Surge").mechanic,
+            ],
+        );
+        assert_distinct(
+            "grid profile",
+            &[
+                grid_rules("Minefield", 1).mechanic,
+                grid_rules("Bomb Sweeper", 1).mechanic,
+                grid_rules("Maze Runner", 1).mechanic,
+                grid_rules("Circuit Trace", 1).mechanic,
+                grid_rules("Trap Runner", 1).mechanic,
+                grid_rules("Reactor Trace", 1).mechanic,
+                grid_rules("Vault Escape", 1).mechanic,
+                grid_rules("Ice Slide", 1).mechanic,
+                grid_rules("Signal Trace", 1).mechanic,
+                grid_rules("Crystal Cavern", 1).mechanic,
+            ],
+        );
+        assert_distinct(
+            "micro lane profile",
+            &[
+                lane_rules(LaneKind::Rune).mechanic,
+                lane_rules(LaneKind::Sea).mechanic,
+                lane_rules(LaneKind::AirHockey).mechanic,
+                lane_rules(LaneKind::Hockey).mechanic,
+                lane_rules(LaneKind::Ski).mechanic,
+                lane_rules(LaneKind::Snowboard).mechanic,
+                lane_rules(LaneKind::Bmx).mechanic,
+                lane_rules(LaneKind::Horse).mechanic,
+                lane_rules(LaneKind::Ninja).mechanic,
+                lane_rules(LaneKind::Moon).mechanic,
+                lane_rules(LaneKind::Saturn).mechanic,
+                lane_rules(LaneKind::Submarine).mechanic,
+                lane_rules(LaneKind::Desert).mechanic,
+                lane_rules(LaneKind::Time).mechanic,
+            ],
+        );
+        assert_distinct(
+            "micro catch profile",
+            &[
+                catch_rules(CatchKind::Glyph).mechanic,
+                catch_rules(CatchKind::Poker).mechanic,
+                catch_rules(CatchKind::Pinball).mechanic,
+                catch_rules(CatchKind::Tennis).mechanic,
+                catch_rules(CatchKind::Cricket).mechanic,
+                catch_rules(CatchKind::Alien).mechanic,
+                catch_rules(CatchKind::Astro).mechanic,
+                catch_rules(CatchKind::Castle).mechanic,
+                catch_rules(CatchKind::Potion).mechanic,
+            ],
+        );
+        assert_distinct(
+            "micro quest profile",
+            &[
+                quest_rules(QuestKind::Checkmate).mechanic,
+                quest_rules(QuestKind::Cipher).mechanic,
+                quest_rules(QuestKind::Marble).mechanic,
+                quest_rules(QuestKind::Quantum).mechanic,
+                quest_rules(QuestKind::Go).mechanic,
+                quest_rules(QuestKind::Pirate).mechanic,
+                quest_rules(QuestKind::Samurai).mechanic,
+                quest_rules(QuestKind::Mars).mechanic,
+                quest_rules(QuestKind::DeepSea).mechanic,
+                quest_rules(QuestKind::Volcano).mechanic,
+                quest_rules(QuestKind::Jungle).mechanic,
+                quest_rules(QuestKind::Dragon).mechanic,
+                quest_rules(QuestKind::Mirror).mechanic,
+            ],
+        );
+    }
+
+    fn assert_distinct(label: &str, values: &[&str]) {
+        let mut seen = HashSet::new();
+        for value in values {
+            assert!(seen.insert(*value), "duplicate {label}: {value}");
+        }
+    }
+
     fn game_mechanic_label(game: &GameInfo) -> String {
         match game.kind {
             GameKind::Snake => "snake-growth".to_string(),
@@ -13527,50 +15047,50 @@ mod tests {
             GameKind::Invaders => "shielded-invader-shooter".to_string(),
             GameKind::Missile => "reticle-city-defense".to_string(),
             GameKind::Breakout => "brick-paddle-breakout".to_string(),
-            GameKind::Meteor => "falling-survival-dodge".to_string(),
+            GameKind::Meteor => falling_rules("Meteor Dodge", 1).mechanic.to_string(),
             GameKind::Racer => "traffic-lane-threading".to_string(),
             GameKind::Frog => "traffic-crossing".to_string(),
             GameKind::Target => "timed-reticle-targets".to_string(),
             GameKind::Coin => "grid-coin-trap-collect".to_string(),
-            GameKind::Minefield => "scanner-minefield-exit".to_string(),
-            GameKind::Maze => "maze-route-exit".to_string(),
+            GameKind::Minefield => grid_rules("Minefield", 1).mechanic.to_string(),
+            GameKind::Maze => grid_rules("Maze Runner", 1).mechanic.to_string(),
             GameKind::Whack => "cursor-pop-targets".to_string(),
             GameKind::Simon => "memory-sequence-repeat".to_string(),
             GameKind::Reaction => "single-key-reaction".to_string(),
             GameKind::Flappy => "up-down-gate-threading".to_string(),
-            GameKind::Asteroid => "asteroid-side-dodge".to_string(),
-            GameKind::Star => "star-bomb-catch".to_string(),
+            GameKind::Asteroid => scroll_rules("Asteroid Belt").mechanic.to_string(),
+            GameKind::Star => falling_rules("Star Catcher", 1).mechanic.to_string(),
             GameKind::Laser => "falling-block-shooter".to_string(),
             GameKind::Dungeon => "enemy-treasure-stairs".to_string(),
-            GameKind::River => "river-fuel-raid".to_string(),
+            GameKind::River => scroll_rules("River Raid").mechanic.to_string(),
             GameKind::Memory => "tile-pair-memory".to_string(),
             GameKind::Number => "timed-arithmetic".to_string(),
-            GameKind::Circuit => "ordered-node-trace".to_string(),
+            GameKind::Circuit => grid_rules("Circuit Trace", 1).mechanic.to_string(),
             GameKind::Orbit => "rotating-core-guard".to_string(),
-            GameKind::BlockDrop => "cargo-crate-catch".to_string(),
-            GameKind::CometCatcher => "combo-comet-catch".to_string(),
-            GameKind::BombSweeper => "hidden-bomb-scanner".to_string(),
-            GameKind::NeonDrift => "momentum-drift-heat".to_string(),
-            GameKind::CargoCatch => "cargo-quota-catch".to_string(),
-            GameKind::GemRush => "gem-combo-chain".to_string(),
-            GameKind::TrapRunner => "moving-trap-grid".to_string(),
-            GameKind::ReactorTrace => "reactor-node-trace".to_string(),
-            GameKind::DroneDodge => "drone-cloud-evasion".to_string(),
-            GameKind::PearlDiver => "oxygen-pearl-dive".to_string(),
-            GameKind::SolarSailer => "solar-charge-sailing".to_string(),
-            GameKind::VaultEscape => "key-locked-vault-exit".to_string(),
-            GameKind::DataStorm => "data-packet-combo".to_string(),
+            GameKind::BlockDrop => falling_rules("Block Drop", 1).mechanic.to_string(),
+            GameKind::CometCatcher => falling_rules("Comet Catcher", 1).mechanic.to_string(),
+            GameKind::BombSweeper => grid_rules("Bomb Sweeper", 1).mechanic.to_string(),
+            GameKind::NeonDrift => scroll_rules("Neon Drift").mechanic.to_string(),
+            GameKind::CargoCatch => falling_rules("Cargo Catch", 1).mechanic.to_string(),
+            GameKind::GemRush => falling_rules("Gem Rush", 1).mechanic.to_string(),
+            GameKind::TrapRunner => grid_rules("Trap Runner", 1).mechanic.to_string(),
+            GameKind::ReactorTrace => grid_rules("Reactor Trace", 1).mechanic.to_string(),
+            GameKind::DroneDodge => scroll_rules("Drone Dodge").mechanic.to_string(),
+            GameKind::PearlDiver => falling_rules("Pearl Diver", 1).mechanic.to_string(),
+            GameKind::SolarSailer => scroll_rules("Solar Sailer").mechanic.to_string(),
+            GameKind::VaultEscape => grid_rules("Vault Escape", 1).mechanic.to_string(),
+            GameKind::DataStorm => falling_rules("Data Storm", 1).mechanic.to_string(),
             GameKind::PixelPop => "cluster-pop-puzzle".to_string(),
             GameKind::BugHunt => "crawler-shooter".to_string(),
-            GameKind::FuelRun => "fuel-route-flight".to_string(),
-            GameKind::SparkChase => "spark-weave-chase".to_string(),
-            GameKind::IceSlide => "ice-slide-maze".to_string(),
-            GameKind::SignalTrace => "signal-node-trace".to_string(),
-            GameKind::OrbitalCourier => "delivery-quota-courier".to_string(),
-            GameKind::RainRunner => "rain-combo-catch".to_string(),
+            GameKind::FuelRun => scroll_rules("Fuel Run").mechanic.to_string(),
+            GameKind::SparkChase => scroll_rules("Spark Chase").mechanic.to_string(),
+            GameKind::IceSlide => grid_rules("Ice Slide", 1).mechanic.to_string(),
+            GameKind::SignalTrace => grid_rules("Signal Trace", 1).mechanic.to_string(),
+            GameKind::OrbitalCourier => scroll_rules("Orbital Courier").mechanic.to_string(),
+            GameKind::RainRunner => falling_rules("Rain Runner", 1).mechanic.to_string(),
             GameKind::ByteBlaster => "falling-letter-typing".to_string(),
-            GameKind::StormSurge => "current-pushed-surf".to_string(),
-            GameKind::CrystalCavern => "crystal-collection-cavern".to_string(),
+            GameKind::StormSurge => scroll_rules("Storm Surge").mechanic.to_string(),
+            GameKind::CrystalCavern => grid_rules("Crystal Cavern", 1).mechanic.to_string(),
             GameKind::TicTacToe => "tic-tac-toe-cpu".to_string(),
             GameKind::Micro(index) => {
                 format!("micro-{}", micro_mode_label(MICRO_GAMES[index].mode))
@@ -13598,78 +15118,11 @@ mod tests {
             MicroMode::Bowling => "bowling".to_string(),
             MicroMode::SkeeBall => "skee-ball".to_string(),
             MicroMode::Keeper => "keeper".to_string(),
-            MicroMode::Quest(kind) => format!("quest-{}", quest_kind_label(kind)),
-            MicroMode::Lane(kind) => format!("lane-{}", lane_kind_label(kind)),
-            MicroMode::Catch(kind) => format!("catch-{}", catch_kind_label(kind)),
-            MicroMode::Aim(kind) => format!("aim-{}", aim_kind_label(kind)),
-            MicroMode::Sequence(kind) => format!("sequence-{}", sequence_kind_label(kind)),
-        }
-    }
-
-    fn quest_kind_label(kind: QuestKind) -> &'static str {
-        match kind {
-            QuestKind::Checkmate => "checkmate",
-            QuestKind::Cipher => "cipher",
-            QuestKind::Marble => "marble",
-            QuestKind::Quantum => "quantum",
-            QuestKind::Go => "go",
-            QuestKind::Pirate => "pirate",
-            QuestKind::Samurai => "samurai",
-            QuestKind::Mars => "mars",
-            QuestKind::DeepSea => "deep-sea",
-            QuestKind::Volcano => "volcano",
-            QuestKind::Jungle => "jungle",
-            QuestKind::Dragon => "dragon",
-            QuestKind::Mirror => "mirror",
-        }
-    }
-
-    fn lane_kind_label(kind: LaneKind) -> &'static str {
-        match kind {
-            LaneKind::Rune => "rune",
-            LaneKind::Sea => "sea",
-            LaneKind::AirHockey => "air-hockey",
-            LaneKind::Hockey => "hockey",
-            LaneKind::Ski => "ski",
-            LaneKind::Snowboard => "snowboard",
-            LaneKind::Bmx => "bmx",
-            LaneKind::Horse => "horse",
-            LaneKind::Ninja => "ninja",
-            LaneKind::Moon => "moon",
-            LaneKind::Saturn => "saturn",
-            LaneKind::Submarine => "submarine",
-            LaneKind::Desert => "desert",
-            LaneKind::Time => "time",
-        }
-    }
-
-    fn catch_kind_label(kind: CatchKind) -> &'static str {
-        match kind {
-            CatchKind::Glyph => "glyph",
-            CatchKind::Poker => "poker",
-            CatchKind::Pinball => "pinball",
-            CatchKind::Tennis => "tennis",
-            CatchKind::Cricket => "cricket",
-            CatchKind::Alien => "alien",
-            CatchKind::Astro => "astro",
-            CatchKind::Castle => "castle",
-            CatchKind::Potion => "potion",
-        }
-    }
-
-    fn aim_kind_label(kind: AimKind) -> &'static str {
-        match kind {
-            AimKind::Basket => "basket",
-            AimKind::Archery => "archery",
-            AimKind::Curling => "curling",
-        }
-    }
-
-    fn sequence_kind_label(kind: SequenceKind) -> &'static str {
-        match kind {
-            SequenceKind::Factory => "factory",
-            SequenceKind::Duel => "duel",
-            SequenceKind::Trick => "trick",
+            MicroMode::Quest(kind) => quest_rules(kind).mechanic.to_string(),
+            MicroMode::Lane(kind) => lane_rules(kind).mechanic.to_string(),
+            MicroMode::Catch(kind) => catch_rules(kind).mechanic.to_string(),
+            MicroMode::Aim(kind) => aim_rules(kind).mechanic.to_string(),
+            MicroMode::Sequence(kind) => sequence_rules(kind, 1).mechanic.to_string(),
         }
     }
 }
