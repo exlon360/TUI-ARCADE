@@ -1,0 +1,13675 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::env;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const TITLE_ART: [&str; 5] = [
+    " _______  _     _  _____      ___    ____   ____    _    ____  _____ ",
+    "|__   __|| |   | ||_   _|    / _ \\  |  _ \\ / ___|  / \\  |  _ \\| ____|",
+    "   | |   | |   | |  | |     | |_| | | |_) | |     / _ \\ | | | |  _|  ",
+    "   | |   | |___| |  | |     |  _  | |  _ <| |___ / ___ \\| |_| | |___ ",
+    "   |_|    \\_____/   |_|     |_| |_| |_| \\_\\\\____/_/   \\_\\____/|_____|",
+];
+
+const DEFAULT_TITLE: &str = "TUI Arcade";
+const MAX_TITLE_LEN: usize = 60;
+
+const COLOR_NAMES: [&str; 16] = [
+    "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White", "Gray", "Hot Red",
+    "Lime", "Gold", "Sky", "Pink", "Aqua", "Bright",
+];
+
+#[derive(Clone)]
+struct Difficulty {
+    name: &'static str,
+    description: &'static str,
+    speed: f64,
+    lives: i32,
+    tick_ms: u64,
+}
+
+const DIFFICULTIES: [Difficulty; 3] = [
+    Difficulty {
+        name: "Easy",
+        description: "Forgiving timing, extra lives, slower enemies.",
+        speed: 0.75,
+        lives: 5,
+        tick_ms: 95,
+    },
+    Difficulty {
+        name: "Normal",
+        description: "Classic terminal arcade pace.",
+        speed: 1.0,
+        lives: 4,
+        tick_ms: 75,
+    },
+    Difficulty {
+        name: "Hard",
+        description: "Faster, tighter, and less forgiving.",
+        speed: 1.28,
+        lives: 3,
+        tick_ms: 55,
+    },
+];
+
+#[derive(Clone)]
+struct Theme {
+    name: String,
+    fg: u8,
+    bg: Option<u8>,
+    title: u8,
+    accent: u8,
+    secondary: u8,
+    danger: u8,
+    success: u8,
+    muted: u8,
+    highlight: u8,
+}
+
+#[derive(Clone)]
+struct GlyphSet {
+    name: &'static str,
+    description: &'static str,
+    top_left: &'static str,
+    top_right: &'static str,
+    bottom_left: &'static str,
+    bottom_right: &'static str,
+    horizontal: &'static str,
+    vertical: &'static str,
+    title_left: &'static str,
+    title_right: &'static str,
+    selector: &'static str,
+    scroll_up: &'static str,
+    scroll_down: &'static str,
+    scroll_track: &'static str,
+    scroll_thumb: &'static str,
+    button_left: &'static str,
+    button_right: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum Role {
+    Normal,
+    Title,
+    Accent,
+    Secondary,
+    Danger,
+    Success,
+    Muted,
+    Highlight,
+}
+
+#[derive(Clone, Copy)]
+struct Controls {
+    up: char,
+    down: char,
+    left: char,
+    right: char,
+    action: char,
+    pause: char,
+    quit: char,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self {
+            up: 'w',
+            down: 's',
+            left: 'a',
+            right: 'd',
+            action: ' ',
+            pause: 'p',
+            quit: 'q',
+        }
+    }
+}
+
+static ACTIVE_CONTROLS: OnceLock<Mutex<Controls>> = OnceLock::new();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Up,
+    Down,
+    Left,
+    Right,
+    Enter,
+    Esc,
+    Space,
+    Backspace,
+    Char(char),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GameCategory {
+    All,
+    Arcade,
+    Action,
+    Puzzle,
+    Strategy,
+    Reflex,
+    Racing,
+    Adventure,
+}
+
+const CATEGORIES: [GameCategory; 8] = [
+    GameCategory::All,
+    GameCategory::Arcade,
+    GameCategory::Action,
+    GameCategory::Puzzle,
+    GameCategory::Strategy,
+    GameCategory::Reflex,
+    GameCategory::Racing,
+    GameCategory::Adventure,
+];
+
+impl GameCategory {
+    fn name(self) -> &'static str {
+        match self {
+            GameCategory::All => "All",
+            GameCategory::Arcade => "Arcade",
+            GameCategory::Action => "Action",
+            GameCategory::Puzzle => "Puzzle",
+            GameCategory::Strategy => "Strategy",
+            GameCategory::Reflex => "Reflex",
+            GameCategory::Racing => "Racing",
+            GameCategory::Adventure => "Adventure",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GameKind {
+    Snake,
+    Tetris,
+    Pong,
+    Invaders,
+    Missile,
+    Breakout,
+    Meteor,
+    Racer,
+    Frog,
+    Target,
+    Coin,
+    Minefield,
+    Maze,
+    Whack,
+    Simon,
+    Reaction,
+    Flappy,
+    Asteroid,
+    Star,
+    Laser,
+    Dungeon,
+    River,
+    Memory,
+    Number,
+    Circuit,
+    Orbit,
+    BlockDrop,
+    CometCatcher,
+    BombSweeper,
+    NeonDrift,
+    CargoCatch,
+    GemRush,
+    TrapRunner,
+    ReactorTrace,
+    DroneDodge,
+    PearlDiver,
+    SolarSailer,
+    VaultEscape,
+    DataStorm,
+    PixelPop,
+    BugHunt,
+    FuelRun,
+    SparkChase,
+    IceSlide,
+    SignalTrace,
+    OrbitalCourier,
+    RainRunner,
+    ByteBlaster,
+    StormSurge,
+    CrystalCavern,
+    TicTacToe,
+    Micro(usize),
+}
+
+struct GameInfo {
+    name: &'static str,
+    summary: &'static str,
+    kind: GameKind,
+}
+
+#[derive(Clone, Copy)]
+enum QuestKind {
+    Checkmate,
+    Cipher,
+    Marble,
+    Quantum,
+    Go,
+    Pirate,
+    Samurai,
+    Mars,
+    DeepSea,
+    Volcano,
+    Jungle,
+    Dragon,
+    Mirror,
+}
+
+#[derive(Clone, Copy)]
+enum LaneKind {
+    Rune,
+    Sea,
+    AirHockey,
+    Hockey,
+    Ski,
+    Snowboard,
+    Bmx,
+    Horse,
+    Ninja,
+    Moon,
+    Saturn,
+    Submarine,
+    Desert,
+    Time,
+}
+
+#[derive(Clone, Copy)]
+enum CatchKind {
+    Glyph,
+    Poker,
+    Pinball,
+    Tennis,
+    Cricket,
+    Alien,
+    Astro,
+    Castle,
+    Potion,
+}
+
+#[derive(Clone, Copy)]
+enum AimKind {
+    Basket,
+    Archery,
+    Curling,
+}
+
+#[derive(Clone, Copy)]
+enum SequenceKind {
+    Factory,
+    Duel,
+    Trick,
+}
+
+#[derive(Clone, Copy)]
+enum WordKind {
+    Vault,
+    Hangman,
+}
+
+#[derive(Clone, Copy)]
+enum MicroMode {
+    ConnectFour,
+    WordGuess(WordKind),
+    Blackjack,
+    BlackjackBlitz,
+    Battleship,
+    TowerStack,
+    LightsOut,
+    SlidePuzzle,
+    DominoChain,
+    MiniGolf,
+    Darts,
+    Mancala,
+    MiniSudoku,
+    Reversi,
+    Bowling,
+    SkeeBall,
+    Keeper,
+    Quest(QuestKind),
+    Lane(LaneKind),
+    Catch(CatchKind),
+    Aim(AimKind),
+    Sequence(SequenceKind),
+}
+
+#[derive(Clone, Copy)]
+struct MicroGame {
+    category: GameCategory,
+    mode: MicroMode,
+}
+
+const GAMES: &[GameInfo] = &[
+    GameInfo {
+        name: "Space Invaders",
+        summary: "Dodge bombs, use shields, and clear the alien block.",
+        kind: GameKind::Invaders,
+    },
+    GameInfo {
+        name: "Tetris",
+        summary: "Stack falling pieces, clear rows, and keep the well open.",
+        kind: GameKind::Tetris,
+    },
+    GameInfo {
+        name: "Snake",
+        summary: "Eat food, grow longer, and avoid walls and your own tail.",
+        kind: GameKind::Snake,
+    },
+    GameInfo {
+        name: "Missile Command",
+        summary: "Aim the reticle and blast incoming missiles before they hit cities.",
+        kind: GameKind::Missile,
+    },
+    GameInfo {
+        name: "Pong",
+        summary: "Fast paddle duel with wall, paddle, and score sounds.",
+        kind: GameKind::Pong,
+    },
+    GameInfo {
+        name: "Breakout",
+        summary: "Bounce the ball, clear bricks, and keep it above your paddle.",
+        kind: GameKind::Breakout,
+    },
+    GameInfo {
+        name: "Meteor Dodge",
+        summary: "Slide through falling rocks and survive the storm.",
+        kind: GameKind::Meteor,
+    },
+    GameInfo {
+        name: "Racer",
+        summary: "Thread your car through traffic lanes.",
+        kind: GameKind::Racer,
+    },
+    GameInfo {
+        name: "Frog Cross",
+        summary: "Hop through moving traffic to reach the far bank.",
+        kind: GameKind::Frog,
+    },
+    GameInfo {
+        name: "Target Practice",
+        summary: "Move the reticle and tag targets before time runs out.",
+        kind: GameKind::Target,
+    },
+    GameInfo {
+        name: "Coin Collector",
+        summary: "Grab coins, dodge traps, and build a score streak.",
+        kind: GameKind::Coin,
+    },
+    GameInfo {
+        name: "Minefield",
+        summary: "Find the exit while avoiding hidden mines.",
+        kind: GameKind::Minefield,
+    },
+    GameInfo {
+        name: "Maze Runner",
+        summary: "Navigate a fresh terminal maze to the goal.",
+        kind: GameKind::Maze,
+    },
+    GameInfo {
+        name: "Whack-a-Mole",
+        summary: "Move the mallet cursor and hit pop-up targets.",
+        kind: GameKind::Whack,
+    },
+    GameInfo {
+        name: "Simon Says",
+        summary: "Watch the command sequence and repeat it from memory.",
+        kind: GameKind::Simon,
+    },
+    GameInfo {
+        name: "Reaction Test",
+        summary: "Hit the prompted key as fast as you can.",
+        kind: GameKind::Reaction,
+    },
+    GameInfo {
+        name: "Flappy Dash",
+        summary: "Move up and down through scrolling gates. No flap gravity.",
+        kind: GameKind::Flappy,
+    },
+    GameInfo {
+        name: "Asteroid Belt",
+        summary: "Pilot through side-scrolling asteroid fields.",
+        kind: GameKind::Asteroid,
+    },
+    GameInfo {
+        name: "Star Catcher",
+        summary: "Catch falling stars while dodging bombs.",
+        kind: GameKind::Star,
+    },
+    GameInfo {
+        name: "Laser Drill",
+        summary: "Drill blocks with laser shots before they reach you.",
+        kind: GameKind::Laser,
+    },
+    GameInfo {
+        name: "Dungeon Crawl",
+        summary: "Find treasure, dodge wandering enemies, and reach the stairs.",
+        kind: GameKind::Dungeon,
+    },
+    GameInfo {
+        name: "River Raid",
+        summary: "Steer down a river, dodge rocks, and collect fuel.",
+        kind: GameKind::River,
+    },
+    GameInfo {
+        name: "Memory Match",
+        summary: "Flip terminal tiles and match all pairs.",
+        kind: GameKind::Memory,
+    },
+    GameInfo {
+        name: "Number Crunch",
+        summary: "Solve quick math prompts under pressure.",
+        kind: GameKind::Number,
+    },
+    GameInfo {
+        name: "Circuit Trace",
+        summary: "Trace nodes in order without crossing live walls.",
+        kind: GameKind::Circuit,
+    },
+    GameInfo {
+        name: "Orbit Guard",
+        summary: "Rotate around the core and block incoming sparks.",
+        kind: GameKind::Orbit,
+    },
+    GameInfo {
+        name: "Block Drop",
+        summary: "Catch falling cargo and avoid cracked blocks.",
+        kind: GameKind::BlockDrop,
+    },
+    GameInfo {
+        name: "Comet Catcher",
+        summary: "Build a comet combo while avoiding hot debris.",
+        kind: GameKind::CometCatcher,
+    },
+    GameInfo {
+        name: "Bomb Sweeper",
+        summary: "Use the scanner to cross a hidden explosive field.",
+        kind: GameKind::BombSweeper,
+    },
+    GameInfo {
+        name: "Neon Drift",
+        summary: "Ride drift momentum and keep heat under control.",
+        kind: GameKind::NeonDrift,
+    },
+    GameInfo {
+        name: "Cargo Catch",
+        summary: "Load the cargo quota while dodging cracked crates.",
+        kind: GameKind::CargoCatch,
+    },
+    GameInfo {
+        name: "Gem Rush",
+        summary: "Chain gem catches into a bigger combo score.",
+        kind: GameKind::GemRush,
+    },
+    GameInfo {
+        name: "Trap Runner",
+        summary: "Race through a grid of moving visible traps.",
+        kind: GameKind::TrapRunner,
+    },
+    GameInfo {
+        name: "Reactor Trace",
+        summary: "Touch reactor nodes in order, then escape.",
+        kind: GameKind::ReactorTrace,
+    },
+    GameInfo {
+        name: "Drone Dodge",
+        summary: "Pilot a drone through incoming hazard clouds.",
+        kind: GameKind::DroneDodge,
+    },
+    GameInfo {
+        name: "Pearl Diver",
+        summary: "Collect pearls to refill oxygen under pressure.",
+        kind: GameKind::PearlDiver,
+    },
+    GameInfo {
+        name: "Solar Sailer",
+        summary: "Build solar charge to slow fuel drain and score.",
+        kind: GameKind::SolarSailer,
+    },
+    GameInfo {
+        name: "Vault Escape",
+        summary: "Collect every vault key before taking the exit.",
+        kind: GameKind::VaultEscape,
+    },
+    GameInfo {
+        name: "Data Storm",
+        summary: "Catch data packets in streaks and avoid errors.",
+        kind: GameKind::DataStorm,
+    },
+    GameInfo {
+        name: "Pixel Pop",
+        summary: "Pop connected color clusters before time runs out.",
+        kind: GameKind::PixelPop,
+    },
+    GameInfo {
+        name: "Bug Hunt",
+        summary: "Shoot crawling bugs before the swarm grows too big.",
+        kind: GameKind::BugHunt,
+    },
+    GameInfo {
+        name: "Fuel Run",
+        summary: "Fly a dangerous route and keep fuel topped up.",
+        kind: GameKind::FuelRun,
+    },
+    GameInfo {
+        name: "Spark Chase",
+        summary: "Weave through sparks and collect glowing orbs.",
+        kind: GameKind::SparkChase,
+    },
+    GameInfo {
+        name: "Ice Slide",
+        summary: "Slide until blocked through an icy maze.",
+        kind: GameKind::IceSlide,
+    },
+    GameInfo {
+        name: "Signal Trace",
+        summary: "Trace signal nodes in sequence without getting lost.",
+        kind: GameKind::SignalTrace,
+    },
+    GameInfo {
+        name: "Orbital Courier",
+        summary: "Hit the packet delivery quota through debris.",
+        kind: GameKind::OrbitalCourier,
+    },
+    GameInfo {
+        name: "Rain Runner",
+        summary: "Catch rain drops in combos and dodge the bad ones.",
+        kind: GameKind::RainRunner,
+    },
+    GameInfo {
+        name: "Byte Blaster",
+        summary: "Type falling byte letters before they hit bottom.",
+        kind: GameKind::ByteBlaster,
+    },
+    GameInfo {
+        name: "Storm Surge",
+        summary: "Fight a shifting current while grabbing fuel.",
+        kind: GameKind::StormSurge,
+    },
+    GameInfo {
+        name: "Crystal Cavern",
+        summary: "Collect every crystal before escaping the cavern.",
+        kind: GameKind::CrystalCavern,
+    },
+    GameInfo {
+        name: "Tic Tac Toe",
+        summary: "Classic 3x3 X/O duel against a blocking CPU.",
+        kind: GameKind::TicTacToe,
+    },
+    GameInfo {
+        name: "Connect Four",
+        summary: "Drop X pieces into columns and race the CPU to four in a row.",
+        kind: GameKind::Micro(0),
+    },
+    GameInfo {
+        name: "Checkmate Dash",
+        summary: "Use knight-style leaps through a maze and land on the king.",
+        kind: GameKind::Micro(1),
+    },
+    GameInfo {
+        name: "Word Vault",
+        summary: "Guess the hidden terminal word before the vault locks.",
+        kind: GameKind::Micro(2),
+    },
+    GameInfo {
+        name: "Glyph Garden",
+        summary: "Catch rare glyph blooms while avoiding thorn marks.",
+        kind: GameKind::Micro(3),
+    },
+    GameInfo {
+        name: "Rune Runner",
+        summary: "Swap lanes, jump rune traps, and collect enough sigils.",
+        kind: GameKind::Micro(4),
+    },
+    GameInfo {
+        name: "Cipher Chase",
+        summary: "Trace cipher nodes in sequence before the grid beats you.",
+        kind: GameKind::Micro(5),
+    },
+    GameInfo {
+        name: "Hangman Vault",
+        summary: "Pick letters, reveal the word, and survive limited wrong guesses.",
+        kind: GameKind::Micro(6),
+    },
+    GameInfo {
+        name: "Mancala Rush",
+        summary: "Sow stones around pits, capture opposite gems, and beat the CPU store.",
+        kind: GameKind::Micro(7),
+    },
+    GameInfo {
+        name: "Sudoku Sweep",
+        summary: "Fill a 4x4 number grid without row, column, or box repeats.",
+        kind: GameKind::Micro(8),
+    },
+    GameInfo {
+        name: "Domino Slider",
+        summary: "Build a domino chain by matching the open number.",
+        kind: GameKind::Micro(9),
+    },
+    GameInfo {
+        name: "Tile Slider",
+        summary: "Solve a shuffled 3x3 tile board in as few moves as possible.",
+        kind: GameKind::Micro(10),
+    },
+    GameInfo {
+        name: "Marble Labyrinth",
+        summary: "Roll until blocked through a maze and plan each stop.",
+        kind: GameKind::Micro(11),
+    },
+    GameInfo {
+        name: "Tower Stack",
+        summary: "Time moving slabs so each layer overlaps the last.",
+        kind: GameKind::Micro(12),
+    },
+    GameInfo {
+        name: "Laser Maze",
+        summary: "Toggle laser nodes in plus patterns until every light is off.",
+        kind: GameKind::Micro(13),
+    },
+    GameInfo {
+        name: "Quantum Cups",
+        summary: "Cross a scanner field where hidden hazards give nearby pings.",
+        kind: GameKind::Micro(14),
+    },
+    GameInfo {
+        name: "Blackjack Table",
+        summary: "Hit, stand, and try to beat the dealer without busting.",
+        kind: GameKind::Micro(15),
+    },
+    GameInfo {
+        name: "Poker Rain",
+        summary: "Draw a five-card terminal hand and score pairs, triples, or quads.",
+        kind: GameKind::Micro(16),
+    },
+    GameInfo {
+        name: "Blackjack Blitz",
+        summary: "Draw up to five cards and bank as close to 21 as possible.",
+        kind: GameKind::Micro(17),
+    },
+    GameInfo {
+        name: "Go Territory",
+        summary: "Claim territory stones across an open board before exiting.",
+        kind: GameKind::Micro(18),
+    },
+    GameInfo {
+        name: "Reversi Flip",
+        summary: "Place discs to flip enemy lines on a 6x6 board.",
+        kind: GameKind::Micro(19),
+    },
+    GameInfo {
+        name: "Battleship Radar",
+        summary: "Fire torpedoes at an 8x8 grid, using radar pings after misses.",
+        kind: GameKind::Micro(20),
+    },
+    GameInfo {
+        name: "Sea Chess",
+        summary: "Shift sea lanes, collect flags, and dodge naval hazards.",
+        kind: GameKind::Micro(21),
+    },
+    GameInfo {
+        name: "Pinball Nudge",
+        summary: "Time the flipper with Space to knock bumpers and avoid drains.",
+        kind: GameKind::Micro(22),
+    },
+    GameInfo {
+        name: "Skee Ball",
+        summary: "Set lane and power, then roll for target rings.",
+        kind: GameKind::Micro(23),
+    },
+    GameInfo {
+        name: "Air Hockey",
+        summary: "Slide between lanes to grab power shots and dodge loose pucks.",
+        kind: GameKind::Micro(24),
+    },
+    GameInfo {
+        name: "Mini Golf",
+        summary: "Aim putts through wall gaps and sink the ball before strokes run out.",
+        kind: GameKind::Micro(25),
+    },
+    GameInfo {
+        name: "Bowling Lane",
+        summary: "Aim and roll down a pin lane across ten frames.",
+        kind: GameKind::Micro(26),
+    },
+    GameInfo {
+        name: "Curling Slide",
+        summary: "Set aim and weight, then slide stones toward the house.",
+        kind: GameKind::Micro(27),
+    },
+    GameInfo {
+        name: "Soccer Keeper",
+        summary: "Slide across the goal line and block incoming shots.",
+        kind: GameKind::Micro(28),
+    },
+    GameInfo {
+        name: "Basket Toss",
+        summary: "Set aim and power, then shoot through wind for points.",
+        kind: GameKind::Micro(29),
+    },
+    GameInfo {
+        name: "Hockey Break",
+        summary: "Break through hockey lanes, collect pucks, and dodge checks.",
+        kind: GameKind::Micro(30),
+    },
+    GameInfo {
+        name: "Tennis Rally",
+        summary: "Move into position and press Space to time each rally hit.",
+        kind: GameKind::Micro(31),
+    },
+    GameInfo {
+        name: "Cricket Catch",
+        summary: "Line up and time catches while bouncers punish bad reads.",
+        kind: GameKind::Micro(32),
+    },
+    GameInfo {
+        name: "Darts Board",
+        summary: "Aim at a dart board while wind nudges each throw.",
+        kind: GameKind::Micro(33),
+    },
+    GameInfo {
+        name: "Archery Range",
+        summary: "Tune aim and draw power while wind pushes each shot.",
+        kind: GameKind::Micro(34),
+    },
+    GameInfo {
+        name: "Ski Slalom",
+        summary: "Match the target gate lane before it reaches the finish.",
+        kind: GameKind::Micro(35),
+    },
+    GameInfo {
+        name: "Snowboard Rail",
+        summary: "Collect sparks while W/S keeps the rail balance meter alive.",
+        kind: GameKind::Micro(36),
+    },
+    GameInfo {
+        name: "Skate Park",
+        summary: "Input the shown trick combo before mistakes wipe the run.",
+        kind: GameKind::Micro(37),
+    },
+    GameInfo {
+        name: "BMX Alley",
+        summary: "Change lanes, jump debris, and grab repair kits.",
+        kind: GameKind::Micro(38),
+    },
+    GameInfo {
+        name: "Horse Dash",
+        summary: "Jump hazards and collect horseshoes before stamina runs dry.",
+        kind: GameKind::Micro(39),
+    },
+    GameInfo {
+        name: "Pirate Plunder",
+        summary: "Collect treasure across a dangerous island map.",
+        kind: GameKind::Micro(40),
+    },
+    GameInfo {
+        name: "Ninja Rooftop",
+        summary: "Dash lanes, jump rooftop hazards, and grab scrolls.",
+        kind: GameKind::Micro(41),
+    },
+    GameInfo {
+        name: "Samurai Path",
+        summary: "Trace honor nodes through a guarded maze.",
+        kind: GameKind::Micro(42),
+    },
+    GameInfo {
+        name: "Robot Factory",
+        summary: "Repeat the assembly sequence to build the bot cleanly.",
+        kind: GameKind::Micro(43),
+    },
+    GameInfo {
+        name: "Alien Orchard",
+        summary: "Harvest glowing fruit while avoiding alien thorns.",
+        kind: GameKind::Micro(44),
+    },
+    GameInfo {
+        name: "Moon Miner",
+        summary: "Shift mining lanes, collect ore, and dodge moon rocks.",
+        kind: GameKind::Micro(45),
+    },
+    GameInfo {
+        name: "Mars Rover",
+        summary: "Use scanner pings to cross hidden hazards and reach the uplink.",
+        kind: GameKind::Micro(46),
+    },
+    GameInfo {
+        name: "Saturn Rings",
+        summary: "Sail ring lanes, grab ice, and dodge fast debris.",
+        kind: GameKind::Micro(47),
+    },
+    GameInfo {
+        name: "Astro Farmer",
+        summary: "Harvest enough orbit crops while avoiding pests.",
+        kind: GameKind::Micro(48),
+    },
+    GameInfo {
+        name: "Deep Sea Maze",
+        summary: "Watch pressure and sonar pings while crossing hidden hazards.",
+        kind: GameKind::Micro(49),
+    },
+    GameInfo {
+        name: "Submarine Sweep",
+        summary: "Shift submarine lanes, collect oxygen, and avoid mines.",
+        kind: GameKind::Micro(50),
+    },
+    GameInfo {
+        name: "Volcano Vault",
+        summary: "Collect crystals and escape before the lava wins.",
+        kind: GameKind::Micro(51),
+    },
+    GameInfo {
+        name: "Jungle Relic",
+        summary: "Find relics in a maze and slip past traps.",
+        kind: GameKind::Micro(52),
+    },
+    GameInfo {
+        name: "Desert Caravan",
+        summary: "Cross dunes, grab water, and avoid heat mirages.",
+        kind: GameKind::Micro(53),
+    },
+    GameInfo {
+        name: "Castle Siege",
+        summary: "Catch enough siege supplies while stones drain your lives.",
+        kind: GameKind::Micro(54),
+    },
+    GameInfo {
+        name: "Dragon Hoard",
+        summary: "Collect treasure through a lair maze and reach the exit.",
+        kind: GameKind::Micro(55),
+    },
+    GameInfo {
+        name: "Wizard Duel",
+        summary: "Cast the displayed spell chain before mistakes break the duel.",
+        kind: GameKind::Micro(56),
+    },
+    GameInfo {
+        name: "Potion Panic",
+        summary: "Catch recipe potions in rhythm while smoke resets progress.",
+        kind: GameKind::Micro(57),
+    },
+    GameInfo {
+        name: "Time Tunnel",
+        summary: "Race fast lanes, collect time sparks, and avoid timeline breaks.",
+        kind: GameKind::Micro(58),
+    },
+    GameInfo {
+        name: "Mirror Maze",
+        summary: "Solve a sliding maze with left and right controls mirrored.",
+        kind: GameKind::Micro(59),
+    },
+];
+
+const MICRO_GAMES: &[MicroGame] = &[
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::ConnectFour,
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Quest(QuestKind::Checkmate),
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::WordGuess(WordKind::Vault),
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::Catch(CatchKind::Glyph),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Lane(LaneKind::Rune),
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::Quest(QuestKind::Cipher),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::WordGuess(WordKind::Hangman),
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Mancala,
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::MiniSudoku,
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::DominoChain,
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::SlidePuzzle,
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::Marble),
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::TowerStack,
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::LightsOut,
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Quest(QuestKind::Quantum),
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Blackjack,
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Catch(CatchKind::Poker),
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::BlackjackBlitz,
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Quest(QuestKind::Go),
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Reversi,
+    },
+    MicroGame {
+        category: GameCategory::Strategy,
+        mode: MicroMode::Battleship,
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Lane(LaneKind::Sea),
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::Catch(CatchKind::Pinball),
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::SkeeBall,
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::Lane(LaneKind::AirHockey),
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::MiniGolf,
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Bowling,
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::Aim(AimKind::Curling),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Keeper,
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Aim(AimKind::Basket),
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Lane(LaneKind::Hockey),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Catch(CatchKind::Tennis),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Catch(CatchKind::Cricket),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Darts,
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Aim(AimKind::Archery),
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Lane(LaneKind::Ski),
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Lane(LaneKind::Snowboard),
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Sequence(SequenceKind::Trick),
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Lane(LaneKind::Bmx),
+    },
+    MicroGame {
+        category: GameCategory::Racing,
+        mode: MicroMode::Lane(LaneKind::Horse),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::Pirate),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Lane(LaneKind::Ninja),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Quest(QuestKind::Samurai),
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::Sequence(SequenceKind::Factory),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Catch(CatchKind::Alien),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Lane(LaneKind::Moon),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::Mars),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Lane(LaneKind::Saturn),
+    },
+    MicroGame {
+        category: GameCategory::Arcade,
+        mode: MicroMode::Catch(CatchKind::Astro),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::DeepSea),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Lane(LaneKind::Submarine),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::Volcano),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::Jungle),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Lane(LaneKind::Desert),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Catch(CatchKind::Castle),
+    },
+    MicroGame {
+        category: GameCategory::Adventure,
+        mode: MicroMode::Quest(QuestKind::Dragon),
+    },
+    MicroGame {
+        category: GameCategory::Action,
+        mode: MicroMode::Sequence(SequenceKind::Duel),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Catch(CatchKind::Potion),
+    },
+    MicroGame {
+        category: GameCategory::Reflex,
+        mode: MicroMode::Lane(LaneKind::Time),
+    },
+    MicroGame {
+        category: GameCategory::Puzzle,
+        mode: MicroMode::Quest(QuestKind::Mirror),
+    },
+];
+
+struct AppState {
+    difficulty_index: usize,
+    theme_index: usize,
+    glyph_index: usize,
+    themes: Vec<Theme>,
+    glyph_sets: Vec<GlyphSet>,
+    app_title: String,
+    scores: HashMap<String, u32>,
+    sound_enabled: bool,
+    click_effects: bool,
+    controls: Controls,
+    rng: Rng,
+    last_sound: HashMap<&'static str, Instant>,
+}
+
+impl AppState {
+    fn difficulty(&self) -> &Difficulty {
+        &DIFFICULTIES[self.difficulty_index]
+    }
+
+    fn theme(&self) -> &Theme {
+        &self.themes[self.theme_index % self.themes.len()]
+    }
+
+    fn glyphs(&self) -> &GlyphSet {
+        &self.glyph_sets[self.glyph_index % self.glyph_sets.len()]
+    }
+
+    fn custom_theme_mut(&mut self) -> &mut Theme {
+        let custom_index = self.themes.len() - 1;
+        self.theme_index = custom_index;
+        save_theme_index(custom_index);
+        &mut self.themes[custom_index]
+    }
+}
+
+struct Terminal {
+    original: String,
+}
+
+impl Terminal {
+    fn enter() -> io::Result<Self> {
+        let original = Command::new("stty")
+            .arg("-g")
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())?;
+        let _ = Command::new("stty")
+            .args(["raw", "-echo", "min", "0", "time", "0"])
+            .status();
+        print!("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+        io::stdout().flush()?;
+        Ok(Self { original })
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        print!("\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = io::stdout().flush();
+        if !self.original.is_empty() {
+            let _ = Command::new("stty").arg(&self.original).status();
+        }
+    }
+}
+
+struct Rng {
+    state: u64,
+}
+
+impl Rng {
+    fn new() -> Self {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let pid = std::process::id() as u64;
+        Self {
+            state: nanos ^ pid.rotate_left(17) ^ 0x9E3779B97F4A7C15,
+        }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state ^= self.state << 7;
+        self.state ^= self.state >> 9;
+        self.state ^= self.state << 8;
+        (self.state >> 16) as u32
+    }
+
+    fn range(&mut self, min: i32, max: i32) -> i32 {
+        if max <= min {
+            return min;
+        }
+        min + (self.next_u32() % ((max - min + 1) as u32)) as i32
+    }
+
+    fn usize(&mut self, max: usize) -> usize {
+        if max == 0 {
+            0
+        } else {
+            (self.next_u32() as usize) % max
+        }
+    }
+
+    fn chance(&mut self, numerator: u32, denominator: u32) -> bool {
+        denominator > 0 && self.next_u32() % denominator < numerator
+    }
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("games error: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
+    let _terminal = Terminal::enter()?;
+    let themes = load_themes();
+    let theme_index = load_theme_index(themes.len());
+    let glyph_sets = load_glyph_sets();
+    let glyph_index = load_glyph_index(glyph_sets.len());
+    let controls = load_controls();
+    sync_controls(controls);
+    let mut state = AppState {
+        difficulty_index: 1,
+        theme_index,
+        glyph_index,
+        themes,
+        glyph_sets,
+        app_title: load_app_title(),
+        scores: load_scores(),
+        sound_enabled: true,
+        click_effects: true,
+        controls,
+        rng: Rng::new(),
+        last_sound: HashMap::new(),
+    };
+    home_menu(&mut state)
+}
+
+fn load_glyph_sets() -> Vec<GlyphSet> {
+    vec![
+        GlyphSet {
+            name: "Classic",
+            description: "ASCII arcade lines.",
+            top_left: "+",
+            top_right: "+",
+            bottom_left: "+",
+            bottom_right: "+",
+            horizontal: "-",
+            vertical: "|",
+            title_left: "[",
+            title_right: "]",
+            selector: ">",
+            scroll_up: "^",
+            scroll_down: "v",
+            scroll_track: "|",
+            scroll_thumb: "#",
+            button_left: "[",
+            button_right: "]",
+        },
+        GlyphSet {
+            name: "Rounded",
+            description: "Soft terminal panels.",
+            top_left: "╭",
+            top_right: "╮",
+            bottom_left: "╰",
+            bottom_right: "╯",
+            horizontal: "─",
+            vertical: "│",
+            title_left: "┤",
+            title_right: "├",
+            selector: "›",
+            scroll_up: "▲",
+            scroll_down: "▼",
+            scroll_track: "│",
+            scroll_thumb: "●",
+            button_left: "‹",
+            button_right: "›",
+        },
+        GlyphSet {
+            name: "Double",
+            description: "Heavy cabinet chrome.",
+            top_left: "╔",
+            top_right: "╗",
+            bottom_left: "╚",
+            bottom_right: "╝",
+            horizontal: "═",
+            vertical: "║",
+            title_left: "╡",
+            title_right: "╞",
+            selector: "▶",
+            scroll_up: "⇧",
+            scroll_down: "⇩",
+            scroll_track: "║",
+            scroll_thumb: "█",
+            button_left: "❮",
+            button_right: "❯",
+        },
+        GlyphSet {
+            name: "Circuit",
+            description: "Sharp neon tracework.",
+            top_left: "┏",
+            top_right: "┓",
+            bottom_left: "┗",
+            bottom_right: "┛",
+            horizontal: "━",
+            vertical: "┃",
+            title_left: "╾",
+            title_right: "╼",
+            selector: "▹",
+            scroll_up: "△",
+            scroll_down: "▽",
+            scroll_track: "┆",
+            scroll_thumb: "◆",
+            button_left: "◁",
+            button_right: "▷",
+        },
+        GlyphSet {
+            name: "Arcane",
+            description: "Runic fantasy ornament.",
+            top_left: "◜",
+            top_right: "◝",
+            bottom_left: "◟",
+            bottom_right: "◞",
+            horizontal: "═",
+            vertical: "║",
+            title_left: "◇",
+            title_right: "◇",
+            selector: "◆",
+            scroll_up: "⬖",
+            scroll_down: "⬘",
+            scroll_track: "╎",
+            scroll_thumb: "◈",
+            button_left: "⟦",
+            button_right: "⟧",
+        },
+        GlyphSet {
+            name: "Starlace",
+            description: "Bright ornamental sparks.",
+            top_left: "✦",
+            top_right: "✦",
+            bottom_left: "✧",
+            bottom_right: "✧",
+            horizontal: "·",
+            vertical: "┊",
+            title_left: "✶",
+            title_right: "✶",
+            selector: "✦",
+            scroll_up: "✧",
+            scroll_down: "✧",
+            scroll_track: "┊",
+            scroll_thumb: "✹",
+            button_left: "✧",
+            button_right: "✧",
+        },
+        GlyphSet {
+            name: "Mythic",
+            description: "Exotic angular relics.",
+            top_left: "◢",
+            top_right: "◣",
+            bottom_left: "◥",
+            bottom_right: "◤",
+            horizontal: "▔",
+            vertical: "▏",
+            title_left: "◀",
+            title_right: "▶",
+            selector: "▰",
+            scroll_up: "▴",
+            scroll_down: "▾",
+            scroll_track: "▏",
+            scroll_thumb: "▣",
+            button_left: "◀",
+            button_right: "▶",
+        },
+    ]
+}
+
+fn load_themes() -> Vec<Theme> {
+    let mut themes = vec![
+        Theme {
+            name: "Neon".to_string(),
+            fg: 15,
+            bg: Some(0),
+            title: 14,
+            accent: 10,
+            secondary: 13,
+            danger: 9,
+            success: 10,
+            muted: 8,
+            highlight: 11,
+        },
+        Theme {
+            name: "Amber".to_string(),
+            fg: 15,
+            bg: Some(0),
+            title: 11,
+            accent: 3,
+            secondary: 10,
+            danger: 9,
+            success: 2,
+            muted: 8,
+            highlight: 15,
+        },
+        Theme {
+            name: "Ocean".to_string(),
+            fg: 15,
+            bg: Some(0),
+            title: 14,
+            accent: 12,
+            secondary: 6,
+            danger: 9,
+            success: 10,
+            muted: 8,
+            highlight: 15,
+        },
+        Theme {
+            name: "Candy".to_string(),
+            fg: 15,
+            bg: Some(0),
+            title: 13,
+            accent: 11,
+            secondary: 14,
+            danger: 9,
+            success: 10,
+            muted: 8,
+            highlight: 15,
+        },
+        Theme {
+            name: "Forest".to_string(),
+            fg: 15,
+            bg: Some(0),
+            title: 10,
+            accent: 2,
+            secondary: 11,
+            danger: 9,
+            success: 14,
+            muted: 8,
+            highlight: 15,
+        },
+        Theme {
+            name: "Mono".to_string(),
+            fg: 15,
+            bg: Some(0),
+            title: 15,
+            accent: 7,
+            secondary: 8,
+            danger: 9,
+            success: 10,
+            muted: 8,
+            highlight: 0,
+        },
+    ];
+    themes.push(load_custom_theme().unwrap_or_else(|| {
+        let mut custom = themes[0].clone();
+        custom.name = "Custom".to_string();
+        custom
+    }));
+    themes
+}
+
+fn home_dir() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn scores_path() -> PathBuf {
+    home_dir().join(".tui_arcade_scores.json")
+}
+
+fn theme_path() -> PathBuf {
+    home_dir().join(".tui_arcade_theme_rust.txt")
+}
+
+fn theme_index_path() -> PathBuf {
+    home_dir().join(".tui_arcade_theme_index.txt")
+}
+
+fn glyph_path() -> PathBuf {
+    home_dir().join(".tui_arcade_glyphs.txt")
+}
+
+fn controls_path() -> PathBuf {
+    home_dir().join(".tui_arcade_controls.txt")
+}
+
+fn title_path() -> PathBuf {
+    home_dir().join(".tui_arcade_title.txt")
+}
+
+fn load_glyph_index(len: usize) -> usize {
+    fs::read_to_string(glyph_path())
+        .ok()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .map(|index| index % len.max(1))
+        .unwrap_or(0)
+}
+
+fn load_theme_index(len: usize) -> usize {
+    fs::read_to_string(theme_index_path())
+        .ok()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .map(|index| index % len.max(1))
+        .unwrap_or(0)
+}
+
+fn save_theme_index(index: usize) {
+    let _ = fs::write(theme_index_path(), format!("{index}\n"));
+}
+
+fn save_glyph_index(index: usize) {
+    let _ = fs::write(glyph_path(), format!("{index}\n"));
+}
+
+fn load_controls() -> Controls {
+    let mut controls = Controls::default();
+    let Ok(text) = fs::read_to_string(controls_path()) else {
+        return controls;
+    };
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Some(ch) = parse_control_value(value) else {
+            continue;
+        };
+        match key {
+            "up" => controls.up = ch,
+            "down" => controls.down = ch,
+            "left" => controls.left = ch,
+            "right" => controls.right = ch,
+            "action" => controls.action = ch,
+            "pause" => controls.pause = ch,
+            "quit" => controls.quit = ch,
+            _ => {}
+        }
+    }
+    if controls_unique(controls) {
+        controls
+    } else {
+        Controls::default()
+    }
+}
+
+fn save_controls(controls: Controls) {
+    let text = format!(
+        "up={}\ndown={}\nleft={}\nright={}\naction={}\npause={}\nquit={}\n",
+        serialize_control_value(controls.up),
+        serialize_control_value(controls.down),
+        serialize_control_value(controls.left),
+        serialize_control_value(controls.right),
+        serialize_control_value(controls.action),
+        serialize_control_value(controls.pause),
+        serialize_control_value(controls.quit)
+    );
+    let _ = fs::write(controls_path(), text);
+}
+
+fn parse_control_value(value: &str) -> Option<char> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("space") {
+        Some(' ')
+    } else {
+        value.chars().next().map(|ch| ch.to_ascii_lowercase())
+    }
+}
+
+fn serialize_control_value(ch: char) -> String {
+    if ch == ' ' {
+        "space".to_string()
+    } else {
+        ch.to_string()
+    }
+}
+
+fn control_label(ch: char) -> String {
+    match ch {
+        ' ' => "Space".to_string(),
+        '\0' => "Unbound".to_string(),
+        other => other.to_ascii_uppercase().to_string(),
+    }
+}
+
+fn controls_unique(controls: Controls) -> bool {
+    let values = [
+        controls.up,
+        controls.down,
+        controls.left,
+        controls.right,
+        controls.action,
+        controls.pause,
+        controls.quit,
+    ];
+    values.iter().enumerate().all(|(index, value)| {
+        *value != '\0' && values.iter().skip(index + 1).all(|other| other != value)
+    })
+}
+
+fn sync_controls(controls: Controls) {
+    let lock = ACTIVE_CONTROLS.get_or_init(|| Mutex::new(Controls::default()));
+    if let Ok(mut active) = lock.lock() {
+        *active = controls;
+    }
+}
+
+fn active_controls() -> Controls {
+    ACTIVE_CONTROLS
+        .get_or_init(|| Mutex::new(Controls::default()))
+        .lock()
+        .map(|controls| *controls)
+        .unwrap_or_default()
+}
+
+fn load_app_title() -> String {
+    fs::read_to_string(title_path())
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| DEFAULT_TITLE.to_string())
+}
+
+fn save_app_title(title: &str) {
+    let _ = fs::write(title_path(), format!("{}\n", title.trim()));
+}
+
+fn load_scores() -> HashMap<String, u32> {
+    let mut scores = HashMap::new();
+    let Ok(text) = fs::read_to_string(scores_path()) else {
+        return scores;
+    };
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        i = start;
+        while i < bytes.len() && bytes[i] != b'"' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let key = String::from_utf8_lossy(&bytes[start..i])
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+        i += 1;
+        while i < bytes.len() && bytes[i] != b':' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        i += 1;
+        while i < bytes.len() && !bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let n_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if let Ok(value) = String::from_utf8_lossy(&bytes[n_start..i]).parse::<u32>() {
+            scores.insert(key, value);
+        }
+    }
+    scores
+}
+
+fn save_scores(scores: &HashMap<String, u32>) {
+    let mut pairs: Vec<_> = scores.iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = String::from("{\n");
+    for (index, (name, score)) in pairs.iter().enumerate() {
+        let comma = if index + 1 == pairs.len() { "" } else { "," };
+        out.push_str(&format!(
+            "  \"{}\": {}{}\n",
+            escape_json(name),
+            score,
+            comma
+        ));
+    }
+    out.push_str("}\n");
+    let _ = fs::write(scores_path(), out);
+}
+
+fn escape_json(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn record_score(state: &mut AppState, game: &str, score: u32) {
+    let entry = state.scores.entry(game.to_string()).or_insert(0);
+    if score > *entry {
+        *entry = score;
+        save_scores(&state.scores);
+    }
+}
+
+fn erase_scores(state: &mut AppState) -> bool {
+    state.scores.clear();
+    match fs::remove_file(scores_path()) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+fn load_custom_theme() -> Option<Theme> {
+    let text = fs::read_to_string(theme_path()).ok()?;
+    let mut theme = Theme {
+        name: "Custom".to_string(),
+        fg: 15,
+        bg: Some(0),
+        title: 14,
+        accent: 10,
+        secondary: 13,
+        danger: 9,
+        success: 10,
+        muted: 8,
+        highlight: 11,
+    };
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key {
+            "fg" => theme.fg = value.parse().unwrap_or(theme.fg),
+            "bg" => theme.bg = parse_bg(value),
+            "title" => theme.title = value.parse().unwrap_or(theme.title),
+            "accent" => theme.accent = value.parse().unwrap_or(theme.accent),
+            "secondary" => theme.secondary = value.parse().unwrap_or(theme.secondary),
+            "danger" => theme.danger = value.parse().unwrap_or(theme.danger),
+            "success" => theme.success = value.parse().unwrap_or(theme.success),
+            "muted" => theme.muted = value.parse().unwrap_or(theme.muted),
+            "highlight" => theme.highlight = value.parse().unwrap_or(theme.highlight),
+            _ => {}
+        }
+    }
+    Some(theme)
+}
+
+fn parse_bg(value: &str) -> Option<u8> {
+    if value == "none" {
+        None
+    } else {
+        value.parse().ok()
+    }
+}
+
+fn save_custom_theme(theme: &Theme) {
+    let bg = theme
+        .bg
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let text = format!(
+        "fg={}\nbg={}\ntitle={}\naccent={}\nsecondary={}\ndanger={}\nsuccess={}\nmuted={}\nhighlight={}\n",
+        theme.fg, bg, theme.title, theme.accent, theme.secondary, theme.danger, theme.success, theme.muted, theme.highlight
+    );
+    let _ = fs::write(theme_path(), text);
+}
+
+fn terminal_size() -> (usize, usize) {
+    let output = Command::new("stty")
+        .arg("size")
+        .stdin(Stdio::inherit())
+        .output();
+    if let Ok(output) = output {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut parts = text.split_whitespace();
+        if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
+            if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
+                return (rows.max(1), cols.max(1));
+            }
+        }
+    }
+    (24, 80)
+}
+
+fn size_changed(last_size: &mut (usize, usize)) -> bool {
+    let size = terminal_size();
+    if size != *last_size {
+        *last_size = size;
+        true
+    } else {
+        false
+    }
+}
+
+fn full_board(min_w: i32, min_h: i32, max_w: i32, max_h: i32) -> (i32, i32) {
+    let (rows, cols) = terminal_size();
+    let width = cols
+        .saturating_sub(8)
+        .max(min_w as usize)
+        .min(max_w as usize);
+    let height = rows
+        .saturating_sub(6)
+        .max(min_h as usize)
+        .min(max_h as usize);
+    (width as i32, height as i32)
+}
+
+fn fg_code(color: u8) -> u8 {
+    if color < 8 {
+        30 + color
+    } else {
+        90 + (color - 8)
+    }
+}
+
+fn bg_code(color: u8) -> u8 {
+    if color < 8 {
+        40 + color
+    } else {
+        100 + (color - 8)
+    }
+}
+
+fn role_color(theme: &Theme, role: Role) -> u8 {
+    match role {
+        Role::Normal => theme.fg,
+        Role::Title => theme.title,
+        Role::Accent => theme.accent,
+        Role::Secondary => theme.secondary,
+        Role::Danger => theme.danger,
+        Role::Success => theme.success,
+        Role::Muted => theme.muted,
+        Role::Highlight => theme.highlight,
+    }
+}
+
+fn style(theme: &Theme, role: Role, bold: bool, inverse: bool) -> String {
+    let fg = role_color(theme, role);
+    let bg = if inverse {
+        Some(theme.highlight)
+    } else {
+        theme.bg
+    };
+    let mut codes = vec![fg_code(fg).to_string()];
+    if let Some(bg) = bg {
+        codes.push(bg_code(bg).to_string());
+    }
+    if bold {
+        codes.push("1".to_string());
+    }
+    if inverse {
+        codes.push("7".to_string());
+    }
+    format!("\x1b[{}m", codes.join(";"))
+}
+
+fn reset() -> &'static str {
+    "\x1b[0m"
+}
+
+fn goto(row: usize, col: usize) -> String {
+    format!("\x1b[{};{}H", row + 1, col + 1)
+}
+
+fn clear_buf(buf: &mut String, theme: &Theme) {
+    buf.push_str("\x1b[0m\x1b[2J\x1b[H");
+    if let Some(bg) = theme.bg {
+        buf.push_str(&format!("\x1b[{}m", bg_code(bg)));
+    }
+}
+
+fn put(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    text: &str,
+    theme: &Theme,
+    role: Role,
+    bold: bool,
+) {
+    buf.push_str(&goto(row, col));
+    buf.push_str(&style(theme, role, bold, false));
+    buf.push_str(text);
+    buf.push_str(reset());
+}
+
+fn put_inv(buf: &mut String, row: usize, col: usize, text: &str, theme: &Theme, role: Role) {
+    buf.push_str(&goto(row, col));
+    buf.push_str(&style(theme, role, true, true));
+    buf.push_str(text);
+    buf.push_str(reset());
+}
+
+fn center(
+    buf: &mut String,
+    row: usize,
+    text: &str,
+    theme: &Theme,
+    role: Role,
+    bold: bool,
+    width: usize,
+) {
+    let col = width.saturating_sub(visible_width(text)) / 2;
+    put(buf, row, col, text, theme, role, bold);
+}
+
+fn draw_box(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    height: usize,
+    width: usize,
+    title: &str,
+    theme: &Theme,
+    role: Role,
+    glyphs: &GlyphSet,
+) {
+    if height < 2 || width < 2 {
+        return;
+    }
+    let top = format!(
+        "{}{}{}",
+        glyphs.top_left,
+        repeat_glyph(glyphs.horizontal, width - 2),
+        glyphs.top_right
+    );
+    let mid = format!(
+        "{}{}{}",
+        glyphs.vertical,
+        " ".repeat(width - 2),
+        glyphs.vertical
+    );
+    let bottom = format!(
+        "{}{}{}",
+        glyphs.bottom_left,
+        repeat_glyph(glyphs.horizontal, width - 2),
+        glyphs.bottom_right
+    );
+    put(buf, row, col, &top, theme, role, false);
+    for y in 1..height - 1 {
+        put(buf, row + y, col, &mid, theme, role, false);
+    }
+    put(buf, row + height - 1, col, &bottom, theme, role, false);
+    let title_text = format!("{} {} {}", glyphs.title_left, title, glyphs.title_right);
+    if !title.is_empty() && visible_width(&title_text) + 2 < width {
+        put(buf, row, col + 2, &title_text, theme, role, true);
+    }
+}
+
+fn draw_scrollbar(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    height: usize,
+    total: usize,
+    visible: usize,
+    start: usize,
+    theme: &Theme,
+    role: Role,
+    glyphs: &GlyphSet,
+) {
+    if height < 3 || visible >= total {
+        return;
+    }
+    put(buf, row, col, glyphs.scroll_up, theme, role, true);
+    put(
+        buf,
+        row + height - 1,
+        col,
+        glyphs.scroll_down,
+        theme,
+        role,
+        true,
+    );
+    let track_h = height - 2;
+    let thumb_h = ((track_h * visible) / total).max(1).min(track_h);
+    let max_start = total.saturating_sub(visible).max(1);
+    let thumb_top = start.saturating_mul(track_h.saturating_sub(thumb_h)) / max_start;
+    for y in 0..track_h {
+        let glyph = if y >= thumb_top && y < thumb_top + thumb_h {
+            glyphs.scroll_thumb
+        } else {
+            glyphs.scroll_track
+        };
+        put(buf, row + 1 + y, col, glyph, theme, role, false);
+    }
+}
+
+fn flush(buf: &str) {
+    print!("{buf}");
+    let _ = io::stdout().flush();
+}
+
+fn read_key() -> Option<Key> {
+    read_key_inner(false)
+}
+
+fn read_text_key() -> Option<Key> {
+    read_key_inner(true)
+}
+
+fn read_key_inner(preserve_case: bool) -> Option<Key> {
+    let mut first = [0u8; 1];
+    let Ok(count) = io::stdin().read(&mut first) else {
+        return None;
+    };
+    if count == 0 {
+        return None;
+    }
+    match first[0] {
+        b'\r' | b'\n' => Some(Key::Enter),
+        b' ' => {
+            if preserve_case || active_controls().action == ' ' {
+                Some(Key::Space)
+            } else {
+                Some(Key::Char('\0'))
+            }
+        }
+        8 | 127 => Some(Key::Backspace),
+        27 => {
+            thread::sleep(Duration::from_millis(1));
+            let mut rest = [0u8; 8];
+            let count = io::stdin().read(&mut rest).unwrap_or(0);
+            if count >= 2 && rest[0] == b'[' {
+                match rest[1] {
+                    b'A' => Some(Key::Up),
+                    b'B' => Some(Key::Down),
+                    b'C' => Some(Key::Right),
+                    b'D' => Some(Key::Left),
+                    _ => Some(Key::Esc),
+                }
+            } else {
+                Some(Key::Esc)
+            }
+        }
+        b => {
+            let ch = b as char;
+            if preserve_case {
+                Some(Key::Char(ch))
+            } else {
+                Some(translate_control_char(ch.to_ascii_lowercase()))
+            }
+        }
+    }
+}
+
+fn translate_control_char(ch: char) -> Key {
+    let controls = active_controls();
+    if ch == controls.up {
+        Key::Char('w')
+    } else if ch == controls.down {
+        Key::Char('s')
+    } else if ch == controls.left {
+        Key::Char('a')
+    } else if ch == controls.right {
+        Key::Char('d')
+    } else if ch == controls.action {
+        Key::Space
+    } else if ch == controls.pause {
+        Key::Char('p')
+    } else if ch == controls.quit {
+        Key::Char('q')
+    } else if matches!(ch, 'w' | 's' | 'a' | 'd' | 'p' | 'q') {
+        Key::Char('\0')
+    } else {
+        Key::Char(ch)
+    }
+}
+
+fn is_quit(key: Key) -> bool {
+    matches!(key, Key::Esc | Key::Char('q'))
+}
+
+fn is_pause(key: Key) -> bool {
+    matches!(key, Key::Char('p'))
+}
+
+fn sleep_frame(start: Instant, frame_ms: u64) {
+    let frame = Duration::from_millis(frame_ms);
+    let elapsed = start.elapsed();
+    if elapsed < frame {
+        thread::sleep(frame - elapsed);
+    }
+}
+
+fn play_sound(state: &mut AppState, kind: &'static str) {
+    if !state.sound_enabled {
+        return;
+    }
+    let gap_ms = match kind {
+        "score" => 140,
+        "wall" => 70,
+        "paddle" => 55,
+        "alert" => 180,
+        _ => 45,
+    };
+    let now = Instant::now();
+    if state
+        .last_sound
+        .get(kind)
+        .is_some_and(|last| now.duration_since(*last) < Duration::from_millis(gap_ms))
+    {
+        return;
+    }
+    state.last_sound.insert(kind, now);
+    print!("\x07");
+    let _ = io::stdout().flush();
+    let sound = match kind {
+        "click" => "/System/Library/Sounds/Tink.aiff",
+        "paddle" => "/System/Library/Sounds/Pop.aiff",
+        "wall" => "/System/Library/Sounds/Funk.aiff",
+        "score" => "/System/Library/Sounds/Glass.aiff",
+        "alert" => "/System/Library/Sounds/Sosumi.aiff",
+        _ => "/System/Library/Sounds/Pop.aiff",
+    };
+    if PathBuf::from(sound).exists() {
+        let _ = Command::new("afplay")
+            .arg(sound)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
+fn click_effect(state: &mut AppState, label: &str) {
+    play_sound(state, "click");
+    if !state.click_effects {
+        return;
+    }
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let glyphs = state.glyphs();
+    let mut buf = String::new();
+    let text = format!("{} {label} {}", glyphs.button_left, glyphs.button_right);
+    put_inv(
+        &mut buf,
+        rows.saturating_sub(2),
+        cols.saturating_sub(visible_width(&text)) / 2,
+        &text,
+        &theme,
+        Role::Accent,
+    );
+    flush(&buf);
+    thread::sleep(Duration::from_millis(55));
+}
+
+fn pause_screen(state: &mut AppState) -> Option<Duration> {
+    let started = Instant::now();
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            let (rows, cols) = terminal_size();
+            let theme = state.theme().clone();
+            let glyphs = state.glyphs();
+            let box_w = 52usize.min(cols.saturating_sub(4)).max(30);
+            let box_h = 8usize;
+            let top = rows.saturating_sub(box_h) / 2;
+            let left = cols.saturating_sub(box_w) / 2;
+            let mut buf = String::new();
+            clear_buf(&mut buf, &theme);
+            draw_box(
+                &mut buf,
+                top,
+                left,
+                box_h,
+                box_w,
+                "PAUSED",
+                &theme,
+                Role::Title,
+                glyphs,
+            );
+            center(
+                &mut buf,
+                top + 2,
+                "Game paused.",
+                &theme,
+                Role::Accent,
+                true,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + 4,
+                "Press P, Enter, or Space to resume.",
+                &theme,
+                Role::Normal,
+                false,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + 5,
+                "Press Q or Esc for menu.",
+                &theme,
+                Role::Muted,
+                false,
+                cols,
+            );
+            flush(&buf);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            if is_quit(key) {
+                return None;
+            }
+            if is_pause(key) || key == Key::Enter || key == Key::Space {
+                return Some(started.elapsed());
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn require_size(state: &AppState, min_rows: usize, min_cols: usize, title: &str) -> bool {
+    let (rows, cols) = terminal_size();
+    if rows >= min_rows && cols >= min_cols {
+        return true;
+    }
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        rows / 2 - 2,
+        title,
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2,
+        &format!("Resize terminal to at least {min_cols}x{min_rows}."),
+        &theme,
+        Role::Danger,
+        false,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 2,
+        "Press Q or Esc.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+    loop {
+        if let Some(key) = read_key() {
+            if is_quit(key) || key == Key::Enter {
+                return false;
+            }
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn wait_menu(state: &mut AppState, title: &str, lines: &[String], restart: bool) -> bool {
+    let mut selected = 0usize;
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        let options = if restart {
+            ["Restart", "Menu"]
+        } else {
+            ["Menu", "Menu"]
+        };
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            let (rows, cols) = terminal_size();
+            let theme = state.theme().clone();
+            let glyphs = state.glyphs();
+            let box_w = 48usize.min(cols.saturating_sub(4)).max(28);
+            let box_h = 8 + lines.len();
+            let top = rows.saturating_sub(box_h) / 2;
+            let left = cols.saturating_sub(box_w) / 2;
+            let mut buf = String::new();
+            clear_buf(&mut buf, &theme);
+            draw_box(
+                &mut buf,
+                top,
+                left,
+                box_h,
+                box_w,
+                title,
+                &theme,
+                Role::Title,
+                glyphs,
+            );
+            for (i, line) in lines.iter().enumerate() {
+                center(
+                    &mut buf,
+                    top + 2 + i,
+                    &trim(line, box_w - 6),
+                    &theme,
+                    if i == 0 { Role::Accent } else { Role::Normal },
+                    i == 0,
+                    cols,
+                );
+            }
+            for i in 0..if restart { 2 } else { 1 } {
+                let text = button_text(glyphs, options[i], i == selected);
+                let row = top + box_h - 3 + i;
+                center(
+                    &mut buf,
+                    row,
+                    &text,
+                    &theme,
+                    if i == selected {
+                        Role::Highlight
+                    } else {
+                        Role::Muted
+                    },
+                    i == selected,
+                    cols,
+                );
+            }
+            flush(&buf);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up | Key::Down | Key::Char('w') | Key::Char('s') if restart => {
+                    selected = 1 - selected;
+                    dirty = true;
+                }
+                Key::Enter | Key::Space => {
+                    click_effect(state, options[selected]);
+                    return restart && selected == 0;
+                }
+                Key::Esc | Key::Char('q') => return false,
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn confirm_dialog(state: &mut AppState, title: &str, lines: &[&str]) -> bool {
+    let mut selected = 1usize;
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            let (rows, cols) = terminal_size();
+            let theme = state.theme().clone();
+            let glyphs = state.glyphs();
+            let box_w = 56usize.min(cols.saturating_sub(4)).max(32);
+            let box_h = 9 + lines.len();
+            let top = rows.saturating_sub(box_h) / 2;
+            let left = cols.saturating_sub(box_w) / 2;
+            let mut buf = String::new();
+            clear_buf(&mut buf, &theme);
+            draw_box(
+                &mut buf,
+                top,
+                left,
+                box_h,
+                box_w,
+                title,
+                &theme,
+                Role::Danger,
+                glyphs,
+            );
+            for (i, line) in lines.iter().enumerate() {
+                center(
+                    &mut buf,
+                    top + 2 + i,
+                    line,
+                    &theme,
+                    Role::Normal,
+                    false,
+                    cols,
+                );
+            }
+            let yes = button_text(glyphs, "YES, ERASE", selected == 0);
+            let no = button_text(glyphs, "CANCEL", selected == 1);
+            center(
+                &mut buf,
+                top + box_h - 4,
+                &yes,
+                &theme,
+                if selected == 0 {
+                    Role::Danger
+                } else {
+                    Role::Muted
+                },
+                selected == 0,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + box_h - 2,
+                &no,
+                &theme,
+                if selected == 1 {
+                    Role::Highlight
+                } else {
+                    Role::Muted
+                },
+                selected == 1,
+                cols,
+            );
+            flush(&buf);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up
+                | Key::Down
+                | Key::Left
+                | Key::Right
+                | Key::Char('w')
+                | Key::Char('s')
+                | Key::Char('a')
+                | Key::Char('d') => {
+                    selected = 1 - selected;
+                    dirty = true;
+                }
+                Key::Enter | Key::Space => {
+                    click_effect(state, if selected == 0 { "erase" } else { "cancel" });
+                    return selected == 0;
+                }
+                Key::Esc | Key::Char('q') => return false,
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn trim(text: &str, width: usize) -> String {
+    if visible_width(text) <= width {
+        text.to_string()
+    } else if width <= 3 {
+        ".".repeat(width)
+    } else {
+        let mut out: String = text.chars().take(width - 3).collect();
+        out.push_str("...");
+        out
+    }
+}
+
+fn visible_width(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn pad_right(text: &str, width: usize) -> String {
+    let mut out = text.to_string();
+    let used = visible_width(text);
+    if used < width {
+        out.push_str(&" ".repeat(width - used));
+    }
+    out
+}
+
+fn repeat_glyph(glyph: &str, count: usize) -> String {
+    let mut out = String::new();
+    for _ in 0..count {
+        out.push_str(glyph);
+    }
+    out
+}
+
+fn button_text(glyphs: &GlyphSet, label: &str, selected: bool) -> String {
+    if selected {
+        format!("{} {} {}", glyphs.button_left, label, glyphs.button_right)
+    } else {
+        format!("  {label}  ")
+    }
+}
+
+fn draw_title_block(buf: &mut String, state: &AppState, row: usize, cols: usize) {
+    let theme = state.theme();
+    let glyphs = state.glyphs();
+    if state.app_title == DEFAULT_TITLE && cols >= TITLE_ART[0].len() + 2 {
+        for (i, line) in TITLE_ART.iter().enumerate() {
+            center(buf, row + i, line, theme, Role::Title, true, cols);
+        }
+        return;
+    }
+
+    let title = trim(&state.app_title, cols.saturating_sub(10).max(10));
+    let title_width = visible_width(&title);
+    let rule_width = (title_width + 8).min(cols.saturating_sub(4)).max(12);
+    let rule = repeat_glyph(glyphs.horizontal, rule_width);
+    center(buf, row + 1, &rule, theme, Role::Muted, false, cols);
+    center(
+        buf,
+        row + 2,
+        &format!("{} {} {}", glyphs.title_left, title, glyphs.title_right),
+        theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(buf, row + 3, &rule, theme, Role::Muted, false, cols);
+}
+
+fn home_menu(state: &mut AppState) -> io::Result<()> {
+    let mut selected = 0usize;
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            draw_home(state, selected);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up | Key::Char('w') => {
+                    selected = selected.saturating_add(2) % 3;
+                    dirty = true;
+                }
+                Key::Down | Key::Char('s') => {
+                    selected = (selected + 1) % 3;
+                    dirty = true;
+                }
+                Key::Esc | Key::Char('q') => {
+                    click_effect(state, "exit");
+                    return Ok(());
+                }
+                Key::Enter | Key::Space => match selected {
+                    0 => {
+                        click_effect(state, "play");
+                        play_menu(state);
+                        dirty = true;
+                    }
+                    1 => {
+                        click_effect(state, "settings");
+                        settings_menu(state);
+                        dirty = true;
+                    }
+                    _ => {
+                        click_effect(state, "exit");
+                        return Ok(());
+                    }
+                },
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn draw_home(state: &AppState, selected: usize) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let glyphs = state.glyphs();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    if rows < 22 || cols < 76 {
+        center(
+            &mut buf,
+            rows / 2 - 2,
+            "TUI Arcade",
+            &theme,
+            Role::Title,
+            true,
+            cols,
+        );
+        center(
+            &mut buf,
+            rows / 2,
+            "Resize terminal to at least 76x22.",
+            &theme,
+            Role::Danger,
+            false,
+            cols,
+        );
+        flush(&buf);
+        return;
+    }
+    draw_title_block(&mut buf, state, 1, cols);
+    let content_w = cols.saturating_sub(6);
+    let left = cols.saturating_sub(content_w) / 2;
+    let top = 9;
+    let panel_h = rows.saturating_sub(top + 3).max(11);
+    let menu_w = (content_w / 3).clamp(28, 40);
+    let status_gap = 4;
+    let status_w = content_w.saturating_sub(menu_w + status_gap).max(34);
+    draw_box(
+        &mut buf,
+        top,
+        left,
+        panel_h,
+        menu_w,
+        "MENU",
+        &theme,
+        Role::Accent,
+        glyphs,
+    );
+    let options = ["Play", "Settings", "Exit"];
+    for (i, option) in options.iter().enumerate() {
+        let row = top + 2 + i * 2;
+        let label = if i == selected {
+            format!("{} {option}", glyphs.selector)
+        } else {
+            format!("  {option}")
+        };
+        if i == selected {
+            put_inv(
+                &mut buf,
+                row,
+                left + 4,
+                &pad_right(&label, menu_w.saturating_sub(8)),
+                &theme,
+                Role::Highlight,
+            );
+        } else {
+            put(
+                &mut buf,
+                row,
+                left + 4,
+                &label,
+                &theme,
+                Role::Secondary,
+                false,
+            );
+        }
+    }
+    let panel_left = left + menu_w + status_gap;
+    draw_box(
+        &mut buf,
+        top,
+        panel_left,
+        panel_h,
+        status_w,
+        "STATUS",
+        &theme,
+        Role::Accent,
+        glyphs,
+    );
+    put(
+        &mut buf,
+        top + 2,
+        panel_left + 2,
+        &format!("Games: {}", GAMES.len()),
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + 3,
+        panel_left + 2,
+        &format!("Difficulty: {}", state.difficulty().name),
+        &theme,
+        Role::Secondary,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 4,
+        panel_left + 2,
+        &format!("Color theme: {}", state.theme().name),
+        &theme,
+        Role::Accent,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 5,
+        panel_left + 2,
+        &format!("Glyphs: {}", state.glyphs().name),
+        &theme,
+        Role::Secondary,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 6,
+        panel_left + 2,
+        &format!("Sound: {}", if state.sound_enabled { "on" } else { "off" }),
+        &theme,
+        Role::Normal,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 7,
+        panel_left + 2,
+        &format!(
+            "Click FX: {}",
+            if state.click_effects { "on" } else { "off" }
+        ),
+        &theme,
+        Role::Normal,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 8,
+        panel_left + 2,
+        &format!("Saved scores: {}", state.scores.len()),
+        &theme,
+        Role::Success,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 10,
+        panel_left + 2,
+        "Enter selects. Q exits.",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    if panel_h > 13 {
+        put(
+            &mut buf,
+            top + 11,
+            panel_left + 2,
+            &format!("Screen: {}x{} fullscreen-aware", cols, rows),
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    center(
+        &mut buf,
+        rows - 2,
+        "Rust terminal arcade. Run it with the games command.",
+        &theme,
+        Role::Muted,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_category(game: &GameInfo) -> GameCategory {
+    match game.kind {
+        GameKind::Tetris
+        | GameKind::Minefield
+        | GameKind::Maze
+        | GameKind::Memory
+        | GameKind::Number
+        | GameKind::Circuit
+        | GameKind::BombSweeper
+        | GameKind::PixelPop
+        | GameKind::IceSlide
+        | GameKind::SignalTrace
+        | GameKind::TicTacToe => GameCategory::Puzzle,
+        GameKind::Pong
+        | GameKind::Breakout
+        | GameKind::Meteor
+        | GameKind::Target
+        | GameKind::Whack
+        | GameKind::Simon
+        | GameKind::Reaction
+        | GameKind::Star
+        | GameKind::BlockDrop
+        | GameKind::CometCatcher
+        | GameKind::CargoCatch
+        | GameKind::GemRush
+        | GameKind::DataStorm
+        | GameKind::RainRunner
+        | GameKind::ByteBlaster => GameCategory::Arcade,
+        GameKind::Racer | GameKind::River | GameKind::FuelRun | GameKind::StormSurge => {
+            GameCategory::Racing
+        }
+        GameKind::Dungeon
+        | GameKind::Coin
+        | GameKind::Frog
+        | GameKind::PearlDiver
+        | GameKind::VaultEscape
+        | GameKind::CrystalCavern => GameCategory::Adventure,
+        GameKind::Micro(index) => MICRO_GAMES
+            .get(index)
+            .map(|game| game.category)
+            .unwrap_or(GameCategory::Arcade),
+        _ => GameCategory::Action,
+    }
+}
+
+fn filtered_game_indices(category: GameCategory, search: &str) -> Vec<usize> {
+    let query = search.trim().to_ascii_lowercase();
+    GAMES
+        .iter()
+        .enumerate()
+        .filter(|(_, game)| {
+            (category == GameCategory::All || game_category(game) == category)
+                && (query.is_empty()
+                    || game.name.to_ascii_lowercase().contains(&query)
+                    || game.summary.to_ascii_lowercase().contains(&query)
+                    || game_category(game)
+                        .name()
+                        .to_ascii_lowercase()
+                        .contains(&query))
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn play_menu(state: &mut AppState) {
+    let mut selected = 0usize;
+    let mut category_index = 0usize;
+    let mut search = String::new();
+    let mut search_mode = false;
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        let category = CATEGORIES[category_index];
+        let filtered = filtered_game_indices(category, &search);
+        if !filtered.is_empty() {
+            selected = selected.min(filtered.len() - 1);
+        } else {
+            selected = 0;
+        }
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            draw_play_menu(state, selected, category, &search, search_mode, &filtered);
+            dirty = false;
+        }
+        if search_mode {
+            if let Some(key) = read_text_key() {
+                match key {
+                    Key::Esc | Key::Enter => search_mode = false,
+                    Key::Backspace => {
+                        search.pop();
+                    }
+                    Key::Space if visible_width(&search) < 28 => search.push(' '),
+                    Key::Char(ch) if !ch.is_control() && visible_width(&search) < 28 => {
+                        search.push(ch);
+                    }
+                    _ => {}
+                }
+                dirty = true;
+            }
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up | Key::Char('w') => {
+                    if !filtered.is_empty() {
+                        selected = (selected + filtered.len() - 1) % filtered.len();
+                    }
+                    dirty = true;
+                }
+                Key::Down | Key::Char('s') => {
+                    if !filtered.is_empty() {
+                        selected = (selected + 1) % filtered.len();
+                    }
+                    dirty = true;
+                }
+                Key::Left | Key::Char('a') => {
+                    state.difficulty_index =
+                        (state.difficulty_index + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
+                    dirty = true;
+                }
+                Key::Right | Key::Char('d') => {
+                    state.difficulty_index = (state.difficulty_index + 1) % DIFFICULTIES.len();
+                    dirty = true;
+                }
+                Key::Char('t') => {
+                    state.theme_index = (state.theme_index + 1) % state.themes.len();
+                    save_theme_index(state.theme_index);
+                    dirty = true;
+                }
+                Key::Char('g') => {
+                    state.glyph_index = (state.glyph_index + 1) % state.glyph_sets.len();
+                    save_glyph_index(state.glyph_index);
+                    dirty = true;
+                }
+                Key::Char('c') => {
+                    theme_lab(state);
+                    dirty = true;
+                }
+                Key::Char('[') => {
+                    category_index = (category_index + CATEGORIES.len() - 1) % CATEGORIES.len();
+                    selected = 0;
+                    dirty = true;
+                }
+                Key::Char(']') => {
+                    category_index = (category_index + 1) % CATEGORIES.len();
+                    selected = 0;
+                    dirty = true;
+                }
+                Key::Char('/') => {
+                    search_mode = true;
+                    dirty = true;
+                }
+                Key::Char('x') if !search.is_empty() => {
+                    search.clear();
+                    selected = 0;
+                    dirty = true;
+                }
+                Key::Enter | Key::Space => {
+                    if let Some(&game_index) = filtered.get(selected) {
+                        let game = &GAMES[game_index];
+                        click_effect(state, game.name);
+                        play_game(state, game);
+                        dirty = true;
+                    }
+                }
+                Key::Esc | Key::Char('q') => {
+                    click_effect(state, "home");
+                    return;
+                }
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn draw_play_menu(
+    state: &AppState,
+    selected: usize,
+    category: GameCategory,
+    search: &str,
+    search_mode: bool,
+    filtered: &[usize],
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let glyphs = state.glyphs();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    if rows < 22 || cols < 76 {
+        center(
+            &mut buf,
+            rows / 2 - 2,
+            "TUI Arcade",
+            &theme,
+            Role::Title,
+            true,
+            cols,
+        );
+        center(
+            &mut buf,
+            rows / 2,
+            "Resize terminal to at least 76x22.",
+            &theme,
+            Role::Danger,
+            false,
+            cols,
+        );
+        flush(&buf);
+        return;
+    }
+    draw_title_block(&mut buf, state, 1, cols);
+    let panel_top = 8;
+    let panel_h = rows.saturating_sub(panel_top + 4).max(12);
+    let content_w = cols.saturating_sub(6);
+    let content_left = cols.saturating_sub(content_w) / 2;
+    let list_w = (content_w * 45 / 100).clamp(36, 72);
+    let list_left = content_left;
+    let detail_left = list_left + list_w + 4;
+    let detail_w = content_w.saturating_sub(list_w + 4).max(34);
+    center(
+        &mut buf,
+        panel_top - 1,
+        &trim(
+            &format!(
+                "Difficulty: < {} >   Category: {}   Theme: {}   {}",
+                state.difficulty().name,
+                category.name(),
+                format!("{} / {}", state.theme().name, state.glyphs().name),
+                state.difficulty().description
+            ),
+            cols - 4,
+        ),
+        &theme,
+        Role::Accent,
+        true,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        panel_top,
+        list_left,
+        panel_h,
+        list_w,
+        "PLAY LIBRARY",
+        &theme,
+        Role::Accent,
+        glyphs,
+    );
+    let visible = panel_h.saturating_sub(4).max(1);
+    let start = selected
+        .saturating_sub(visible - 1)
+        .min(filtered.len().saturating_sub(visible));
+    for (row_index, pos) in (start..(start + visible).min(filtered.len())).enumerate() {
+        let index = filtered[pos];
+        let game = &GAMES[index];
+        let score = state.scores.get(game.name).copied().unwrap_or(0);
+        let row = panel_top + 2 + row_index;
+        let label = format!(
+            "{} {:03}. {}",
+            if pos == selected {
+                glyphs.selector
+            } else {
+                " "
+            },
+            index + 1,
+            trim(game.name, list_w - 15)
+        );
+        if pos == selected {
+            put_inv(
+                &mut buf,
+                row,
+                list_left + 2,
+                &pad_right(&label, list_w - 4),
+                &theme,
+                Role::Highlight,
+            );
+        } else {
+            put(
+                &mut buf,
+                row,
+                list_left + 2,
+                &label,
+                &theme,
+                if pos % 2 == 0 {
+                    Role::Secondary
+                } else {
+                    Role::Normal
+                },
+                false,
+            );
+        }
+        if score > 0 {
+            put(
+                &mut buf,
+                row,
+                list_left + list_w - 8,
+                &score.to_string(),
+                &theme,
+                Role::Success,
+                false,
+            );
+        }
+    }
+    draw_scrollbar(
+        &mut buf,
+        panel_top + 1,
+        list_left + list_w - 3,
+        panel_h - 2,
+        filtered.len().max(1),
+        visible,
+        start,
+        &theme,
+        Role::Muted,
+        glyphs,
+    );
+    let Some(&selected_index) = filtered.get(selected) else {
+        draw_box(
+            &mut buf,
+            panel_top,
+            detail_left,
+            panel_h,
+            detail_w,
+            "NO MATCHES",
+            &theme,
+            Role::Accent,
+            glyphs,
+        );
+        put(
+            &mut buf,
+            panel_top + 2,
+            detail_left + 2,
+            "No games match this category/search.",
+            &theme,
+            Role::Danger,
+            true,
+        );
+        put(
+            &mut buf,
+            panel_top + 4,
+            detail_left + 2,
+            "Press / to edit search, X to clear, [ or ] for categories.",
+            &theme,
+            Role::Muted,
+            false,
+        );
+        center(
+            &mut buf,
+            rows - 2,
+            "Search and categories filter the full arcade library.",
+            &theme,
+            Role::Muted,
+            true,
+            cols,
+        );
+        flush(&buf);
+        return;
+    };
+    let game = &GAMES[selected_index];
+    draw_box(
+        &mut buf,
+        panel_top,
+        detail_left,
+        panel_h,
+        detail_w,
+        &game.name.to_ascii_uppercase(),
+        &theme,
+        Role::Accent,
+        glyphs,
+    );
+    let wrapped = wrap(game.summary, detail_w - 5);
+    for (i, line) in wrapped.iter().take(4).enumerate() {
+        put(
+            &mut buf,
+            panel_top + 2 + i,
+            detail_left + 2,
+            line,
+            &theme,
+            Role::Normal,
+            false,
+        );
+    }
+    put(
+        &mut buf,
+        panel_top + 6,
+        detail_left + 2,
+        &format!(
+            "{}   High score: {}",
+            game_category(game).name(),
+            state.scores.get(game.name).copied().unwrap_or(0)
+        ),
+        &theme,
+        Role::Success,
+        true,
+    );
+    if panel_h <= 12 {
+        let controls_top = panel_top + 7;
+        put(
+            &mut buf,
+            controls_top,
+            detail_left + 2,
+            "W/S choose | A/D difficulty | / search",
+            &theme,
+            Role::Muted,
+            false,
+        );
+        put(
+            &mut buf,
+            controls_top + 1,
+            detail_left + 2,
+            "[ ] category | T colors | G glyphs",
+            &theme,
+            Role::Muted,
+            false,
+        );
+        put(
+            &mut buf,
+            controls_top + 2,
+            detail_left + 2,
+            "Enter launch | P pause | Q home",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    } else {
+        let controls_top = panel_top + panel_h.saturating_sub(6);
+        put(
+            &mut buf,
+            controls_top,
+            detail_left + 2,
+            "Controls",
+            &theme,
+            Role::Secondary,
+            true,
+        );
+        put(
+            &mut buf,
+            controls_top + 1,
+            detail_left + 2,
+            &format!(
+                "Library: {}/{} shown   Search: {}{}",
+                filtered.len(),
+                GAMES.len(),
+                if search_mode { "editing " } else { "" },
+                if search.is_empty() { "(empty)" } else { search }
+            ),
+            &theme,
+            Role::Muted,
+            false,
+        );
+        put(
+            &mut buf,
+            controls_top + 2,
+            detail_left + 2,
+            "/ search | X clear | [ ] category",
+            &theme,
+            Role::Muted,
+            false,
+        );
+        put(
+            &mut buf,
+            controls_top + 3,
+            detail_left + 2,
+            "Left/Right: difficulty | T colors | G glyphs | C lab",
+            &theme,
+            Role::Muted,
+            false,
+        );
+        put(
+            &mut buf,
+            controls_top + 4,
+            detail_left + 2,
+            "Enter launch | P pause | Q home",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    center(
+        &mut buf,
+        rows - 2,
+        "Scores save automatically. Rust build keeps the terminal fast.",
+        &theme,
+        Role::Muted,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_string()
+        } else {
+            format!("{line} {word}")
+        };
+        if visible_width(&candidate) > width && !line.is_empty() {
+            lines.push(line);
+            line = word.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn settings_rows(state: &AppState) -> Vec<(String, String)> {
+    vec![
+        (
+            "Difficulty".to_string(),
+            state.difficulty().name.to_string(),
+        ),
+        ("Color theme".to_string(), state.theme().name.clone()),
+        (
+            "Glyph set".to_string(),
+            format!("{} - {}", state.glyphs().name, state.glyphs().description),
+        ),
+        ("Startup title".to_string(), state.app_title.clone()),
+        (
+            "Title color".to_string(),
+            COLOR_NAMES[state.theme().title as usize].to_string(),
+        ),
+        (
+            "Accent color".to_string(),
+            COLOR_NAMES[state.theme().accent as usize].to_string(),
+        ),
+        (
+            "Danger color".to_string(),
+            COLOR_NAMES[state.theme().danger as usize].to_string(),
+        ),
+        (
+            "Highlight color".to_string(),
+            COLOR_NAMES[state.theme().highlight as usize].to_string(),
+        ),
+        (
+            "Background".to_string(),
+            state
+                .theme()
+                .bg
+                .map(|c| COLOR_NAMES[c as usize].to_string())
+                .unwrap_or_else(|| "Terminal default".to_string()),
+        ),
+        (
+            "Sound".to_string(),
+            if state.sound_enabled { "on" } else { "off" }.to_string(),
+        ),
+        ("Sound test".to_string(), "play chime".to_string()),
+        (
+            "Click effects".to_string(),
+            if state.click_effects { "on" } else { "off" }.to_string(),
+        ),
+        (
+            "Controls".to_string(),
+            format!(
+                "{}/{}/{}/{} action {}",
+                control_label(state.controls.up),
+                control_label(state.controls.down),
+                control_label(state.controls.left),
+                control_label(state.controls.right),
+                control_label(state.controls.action)
+            ),
+        ),
+        (
+            "Erase scores".to_string(),
+            format!("{} saved", state.scores.len()),
+        ),
+        ("Back".to_string(), "return home".to_string()),
+    ]
+}
+
+fn settings_menu(state: &mut AppState) {
+    let mut selected = 0usize;
+    let mut message = "Color themes and glyph sets mix independently.".to_string();
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        let rows = settings_rows(state);
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            draw_settings(state, selected, &message, &rows);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up | Key::Char('w') => selected = (selected + rows.len() - 1) % rows.len(),
+                Key::Down | Key::Char('s') => selected = (selected + 1) % rows.len(),
+                Key::Left | Key::Char('a') => {
+                    settings_adjust(state, selected, -1, &mut message);
+                }
+                Key::Right | Key::Char('d') => {
+                    settings_adjust(state, selected, 1, &mut message);
+                }
+                Key::Enter | Key::Space => match selected {
+                    0 => settings_adjust(state, selected, 1, &mut message),
+                    1 => settings_adjust(state, selected, 1, &mut message),
+                    2 => settings_adjust(state, selected, 1, &mut message),
+                    3 => {
+                        message = if edit_title_screen(state) {
+                            "Startup title saved.".to_string()
+                        } else {
+                            "Title edit cancelled.".to_string()
+                        };
+                    }
+                    4..=8 => settings_adjust(state, selected, 1, &mut message),
+                    9 => {
+                        state.sound_enabled = !state.sound_enabled;
+                        click_effect(state, "sound");
+                        message = format!(
+                            "Sound {}.",
+                            if state.sound_enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                    }
+                    10 => {
+                        play_sound(state, "score");
+                        message = "Played a macOS sound test.".to_string();
+                    }
+                    11 => {
+                        state.click_effects = !state.click_effects;
+                        click_effect(state, "click fx");
+                        message = format!(
+                            "Click effects {}.",
+                            if state.click_effects {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                    }
+                    12 => {
+                        controls_menu(state);
+                        message = "Controls updated.".to_string();
+                    }
+                    13 => {
+                        if confirm_dialog(
+                            state,
+                            "ERASE SCORES?",
+                            &[
+                                "This permanently deletes saved high scores.",
+                                "Your custom theme is not affected.",
+                                "Choose YES only if you mean it.",
+                            ],
+                        ) {
+                            message = if erase_scores(state) {
+                                "Scores erased.".to_string()
+                            } else {
+                                "Could not erase scores.".to_string()
+                            };
+                        } else {
+                            message = "Score erase cancelled.".to_string();
+                        }
+                    }
+                    14 => {
+                        click_effect(state, "back");
+                        return;
+                    }
+                    _ => {}
+                },
+                Key::Esc | Key::Char('q') => {
+                    click_effect(state, "back");
+                    return;
+                }
+                _ => {}
+            }
+            dirty = true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn settings_adjust(state: &mut AppState, selected: usize, delta: i32, message: &mut String) {
+    match selected {
+        0 => {
+            state.difficulty_index = wrap_index(state.difficulty_index, DIFFICULTIES.len(), delta);
+            *message = "Difficulty changed.".to_string();
+        }
+        1 => {
+            state.theme_index = wrap_index(state.theme_index, state.themes.len(), delta);
+            save_theme_index(state.theme_index);
+            *message = "Color theme changed.".to_string();
+        }
+        2 => {
+            state.glyph_index = wrap_index(state.glyph_index, state.glyph_sets.len(), delta);
+            save_glyph_index(state.glyph_index);
+            *message = "Glyph set changed independently of colors.".to_string();
+        }
+        3 => {
+            *message = "Press Enter to edit the startup title.".to_string();
+        }
+        4 => {
+            let theme = state.custom_theme_mut();
+            theme.title = wrap_color(theme.title, delta);
+            save_custom_theme(theme);
+            *message = "Custom title color saved.".to_string();
+        }
+        5 => {
+            let theme = state.custom_theme_mut();
+            theme.accent = wrap_color(theme.accent, delta);
+            save_custom_theme(theme);
+            *message = "Custom accent color saved.".to_string();
+        }
+        6 => {
+            let theme = state.custom_theme_mut();
+            theme.danger = wrap_color(theme.danger, delta);
+            save_custom_theme(theme);
+            *message = "Custom danger color saved.".to_string();
+        }
+        7 => {
+            let theme = state.custom_theme_mut();
+            theme.highlight = wrap_color(theme.highlight, delta);
+            save_custom_theme(theme);
+            *message = "Custom highlight color saved.".to_string();
+        }
+        8 => {
+            let theme = state.custom_theme_mut();
+            let next = match theme.bg {
+                None if delta >= 0 => Some(0),
+                None => Some(15),
+                Some(color) => {
+                    let value = color as i32 + delta;
+                    if value < 0 || value > 15 {
+                        None
+                    } else {
+                        Some(value as u8)
+                    }
+                }
+            };
+            theme.bg = next;
+            save_custom_theme(theme);
+            *message = "Custom background saved.".to_string();
+        }
+        12 => {
+            *message = "Press Enter to edit controls.".to_string();
+        }
+        _ => {}
+    }
+}
+
+fn controls_menu(state: &mut AppState) {
+    let mut selected = 0usize;
+    let mut message = "Enter changes a binding. Reset restores WASD / Space / P / Q.".to_string();
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            draw_controls_menu(state, selected, &message);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up | Key::Char('w') => {
+                    selected = (selected + 8) % 9;
+                    dirty = true;
+                }
+                Key::Down | Key::Char('s') => {
+                    selected = (selected + 1) % 9;
+                    dirty = true;
+                }
+                Key::Enter | Key::Space => {
+                    if selected < 7 {
+                        let label = control_row_label(selected);
+                        if let Some(ch) = capture_control_key(state, label) {
+                            if control_taken(state.controls, selected, ch) {
+                                message = format!("{} is already bound.", control_label(ch));
+                            } else {
+                                set_control_value(&mut state.controls, selected, ch);
+                                save_controls(state.controls);
+                                sync_controls(state.controls);
+                                message = format!("{label} set to {}.", control_label(ch));
+                            }
+                        } else {
+                            message = "Control edit cancelled.".to_string();
+                        }
+                    } else if selected == 7 {
+                        state.controls = Controls::default();
+                        save_controls(state.controls);
+                        sync_controls(state.controls);
+                        message = "Controls reset.".to_string();
+                    } else {
+                        return;
+                    }
+                    dirty = true;
+                }
+                Key::Esc | Key::Char('q') => return,
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn control_row_label(index: usize) -> &'static str {
+    match index {
+        0 => "Move up",
+        1 => "Move down",
+        2 => "Move left",
+        3 => "Move right",
+        4 => "Action",
+        5 => "Pause",
+        6 => "Quit",
+        7 => "Reset defaults",
+        _ => "Back",
+    }
+}
+
+fn control_value(controls: Controls, index: usize) -> char {
+    match index {
+        0 => controls.up,
+        1 => controls.down,
+        2 => controls.left,
+        3 => controls.right,
+        4 => controls.action,
+        5 => controls.pause,
+        6 => controls.quit,
+        _ => '\0',
+    }
+}
+
+fn set_control_value(controls: &mut Controls, index: usize, value: char) {
+    match index {
+        0 => controls.up = value,
+        1 => controls.down = value,
+        2 => controls.left = value,
+        3 => controls.right = value,
+        4 => controls.action = value,
+        5 => controls.pause = value,
+        6 => controls.quit = value,
+        _ => {}
+    }
+}
+
+fn control_taken(controls: Controls, selected: usize, value: char) -> bool {
+    (0..7).any(|index| index != selected && control_value(controls, index) == value)
+}
+
+fn draw_controls_menu(state: &AppState, selected: usize, message: &str) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let glyphs = state.glyphs();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    if rows < 22 || cols < 74 {
+        center(
+            &mut buf,
+            rows / 2 - 2,
+            "CONTROLS",
+            &theme,
+            Role::Title,
+            true,
+            cols,
+        );
+        center(
+            &mut buf,
+            rows / 2,
+            "Resize terminal to at least 74x22.",
+            &theme,
+            Role::Danger,
+            false,
+            cols,
+        );
+        flush(&buf);
+        return;
+    }
+    center(&mut buf, 1, "CONTROLS", &theme, Role::Title, true, cols);
+    let box_w = 60usize.min(cols.saturating_sub(6)).max(44);
+    let box_h = 17usize;
+    let top = rows.saturating_sub(box_h) / 2;
+    let left = cols.saturating_sub(box_w) / 2;
+    draw_box(
+        &mut buf,
+        top,
+        left,
+        box_h,
+        box_w,
+        "REBIND",
+        &theme,
+        Role::Accent,
+        glyphs,
+    );
+    for index in 0..9 {
+        let row = top + 2 + index;
+        let label = control_row_label(index);
+        let value = if index < 7 {
+            control_label(control_value(state.controls, index))
+        } else if index == 7 {
+            "restore".to_string()
+        } else {
+            "return".to_string()
+        };
+        let text = format!(
+            "{} {:<18} {}",
+            if selected == index {
+                glyphs.selector
+            } else {
+                " "
+            },
+            label,
+            value
+        );
+        if selected == index {
+            put_inv(
+                &mut buf,
+                row,
+                left + 3,
+                &pad_right(&text, box_w - 6),
+                &theme,
+                Role::Highlight,
+            );
+        } else {
+            put(
+                &mut buf,
+                row,
+                left + 3,
+                &text,
+                &theme,
+                if index < 7 {
+                    Role::Normal
+                } else {
+                    Role::Secondary
+                },
+                false,
+            );
+        }
+    }
+    put(
+        &mut buf,
+        top + box_h - 4,
+        left + 3,
+        &trim(message, box_w - 6),
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + box_h - 2,
+        left + 3,
+        "Arrow keys and Enter/Esc always work as safety controls.",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    flush(&buf);
+}
+
+fn capture_control_key(state: &AppState, label: &str) -> Option<char> {
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            let (rows, cols) = terminal_size();
+            let theme = state.theme().clone();
+            let glyphs = state.glyphs();
+            let box_w = 56usize.min(cols.saturating_sub(4)).max(34);
+            let box_h = 9usize;
+            let top = rows.saturating_sub(box_h) / 2;
+            let left = cols.saturating_sub(box_w) / 2;
+            let mut buf = String::new();
+            clear_buf(&mut buf, &theme);
+            draw_box(
+                &mut buf,
+                top,
+                left,
+                box_h,
+                box_w,
+                "PRESS KEY",
+                &theme,
+                Role::Accent,
+                glyphs,
+            );
+            center(
+                &mut buf,
+                top + 2,
+                &format!("Set {label}"),
+                &theme,
+                Role::Title,
+                true,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + 4,
+                "Press a letter, number, punctuation key, or Space.",
+                &theme,
+                Role::Normal,
+                false,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + 6,
+                "Esc cancels.",
+                &theme,
+                Role::Muted,
+                false,
+                cols,
+            );
+            flush(&buf);
+            dirty = false;
+        }
+        if let Some(key) = read_text_key() {
+            match key {
+                Key::Esc => return None,
+                Key::Space => return Some(' '),
+                Key::Char(ch) if !ch.is_control() => return Some(ch.to_ascii_lowercase()),
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn edit_title_screen(state: &mut AppState) -> bool {
+    let current_title = state.app_title.clone();
+    let mut input = String::new();
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            let (rows, cols) = terminal_size();
+            let theme = state.theme().clone();
+            let glyphs = state.glyphs();
+            let box_w = 66usize.min(cols.saturating_sub(4)).max(34);
+            let box_h = 11usize;
+            let top = rows.saturating_sub(box_h) / 2;
+            let left = cols.saturating_sub(box_w) / 2;
+            let field_w = box_w.saturating_sub(6).max(12);
+            let mut shown = trim(&input, field_w.saturating_sub(1));
+            shown.push('_');
+            let mut buf = String::new();
+            clear_buf(&mut buf, &theme);
+            draw_box(
+                &mut buf,
+                top,
+                left,
+                box_h,
+                box_w,
+                "STARTUP TITLE",
+                &theme,
+                Role::Title,
+                glyphs,
+            );
+            center(
+                &mut buf,
+                top + 2,
+                &format!(
+                    "Current: {}",
+                    trim(&current_title, box_w.saturating_sub(16))
+                ),
+                &theme,
+                Role::Muted,
+                false,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + 3,
+                "Type a replacement for the opening screens.",
+                &theme,
+                Role::Normal,
+                false,
+                cols,
+            );
+            put_inv(
+                &mut buf,
+                top + 5,
+                left + 3,
+                &pad_right(&shown, field_w),
+                &theme,
+                Role::Highlight,
+            );
+            center(
+                &mut buf,
+                top + 7,
+                "Enter saves. Esc cancels. Backspace deletes.",
+                &theme,
+                Role::Muted,
+                false,
+                cols,
+            );
+            center(
+                &mut buf,
+                top + 8,
+                "Saving an empty title restores the default.",
+                &theme,
+                Role::Muted,
+                false,
+                cols,
+            );
+            flush(&buf);
+            dirty = false;
+        }
+        if let Some(key) = read_text_key() {
+            match key {
+                Key::Enter => {
+                    let trimmed = input.trim();
+                    state.app_title = if trimmed.is_empty() {
+                        DEFAULT_TITLE.to_string()
+                    } else {
+                        trimmed.to_string()
+                    };
+                    save_app_title(&state.app_title);
+                    click_effect(state, "save title");
+                    return true;
+                }
+                Key::Esc => return false,
+                Key::Backspace => {
+                    input.pop();
+                    dirty = true;
+                }
+                Key::Space if visible_width(&input) < MAX_TITLE_LEN => {
+                    input.push(' ');
+                    dirty = true;
+                }
+                Key::Char(ch) if !ch.is_control() && visible_width(&input) < MAX_TITLE_LEN => {
+                    input.push(ch);
+                    dirty = true;
+                }
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wrap_color(color: u8, delta: i32) -> u8 {
+    ((color as i32 + delta).rem_euclid(16)) as u8
+}
+
+fn wrap_index(index: usize, len: usize, delta: i32) -> usize {
+    ((index as i32 + delta).rem_euclid(len as i32)) as usize
+}
+
+fn draw_settings(state: &AppState, selected: usize, message: &str, rows_data: &[(String, String)]) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let glyphs = state.glyphs();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    if rows < 22 || cols < 76 {
+        center(
+            &mut buf,
+            rows / 2 - 2,
+            "Settings",
+            &theme,
+            Role::Title,
+            true,
+            cols,
+        );
+        center(
+            &mut buf,
+            rows / 2,
+            "Resize terminal to at least 76x22.",
+            &theme,
+            Role::Danger,
+            false,
+            cols,
+        );
+        flush(&buf);
+        return;
+    }
+    center(&mut buf, 1, "SETTINGS", &theme, Role::Title, true, cols);
+    let content_w = cols.saturating_sub(6);
+    let left = cols.saturating_sub(content_w) / 2;
+    let top = 4;
+    let box_w = content_w;
+    let box_h = rows.saturating_sub(top + 4).max(18);
+    draw_box(
+        &mut buf,
+        top,
+        left,
+        box_h,
+        box_w,
+        "ARCADE SETTINGS",
+        &theme,
+        Role::Accent,
+        glyphs,
+    );
+    for (i, (label, value)) in rows_data.iter().enumerate() {
+        let row = top + 2 + i;
+        let marker = if i == selected { glyphs.selector } else { " " };
+        let left_text = format!("{marker} {label}");
+        if i == selected {
+            put_inv(
+                &mut buf,
+                row,
+                left + 3,
+                &pad_right(&left_text, 27),
+                &theme,
+                Role::Highlight,
+            );
+            put_inv(
+                &mut buf,
+                row,
+                left + 31,
+                &pad_right(&trim(value, 28), 28),
+                &theme,
+                Role::Highlight,
+            );
+        } else {
+            put(
+                &mut buf,
+                row,
+                left + 3,
+                &left_text,
+                &theme,
+                if i % 2 == 0 {
+                    Role::Secondary
+                } else {
+                    Role::Normal
+                },
+                false,
+            );
+            put(
+                &mut buf,
+                row,
+                left + 31,
+                &trim(value, 28),
+                &theme,
+                Role::Muted,
+                false,
+            );
+        }
+    }
+    put(
+        &mut buf,
+        top + box_h.saturating_sub(3),
+        left + 3,
+        "Left/Right changes values. Enter activates rows.",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    put(
+        &mut buf,
+        top + box_h.saturating_sub(2),
+        left + 3,
+        &trim(message, box_w - 6),
+        &theme,
+        Role::Success,
+        true,
+    );
+    center(
+        &mut buf,
+        rows - 2,
+        "Esc/Q returns home.",
+        &theme,
+        Role::Muted,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn theme_lab(state: &mut AppState) {
+    let mut selected = 0usize;
+    let mut message =
+        "Left/Right edits. P copies current preset. R randomizes. Q returns.".to_string();
+    let mut dirty = true;
+    let mut last_size = terminal_size();
+    loop {
+        if size_changed(&mut last_size) {
+            dirty = true;
+        }
+        if dirty {
+            let theme = state.theme().clone();
+            let glyphs = state.glyphs();
+            let (rows, cols) = terminal_size();
+            let mut buf = String::new();
+            clear_buf(&mut buf, &theme);
+            if rows < 24 || cols < 80 {
+                center(
+                    &mut buf,
+                    rows / 2 - 2,
+                    "Theme Lab",
+                    &theme,
+                    Role::Title,
+                    true,
+                    cols,
+                );
+                center(
+                    &mut buf,
+                    rows / 2,
+                    "Resize terminal to at least 80x24.",
+                    &theme,
+                    Role::Danger,
+                    false,
+                    cols,
+                );
+                flush(&buf);
+            } else {
+                center(&mut buf, 1, "THEME LAB", &theme, Role::Title, true, cols);
+                let left = cols / 2 - 38;
+                draw_box(
+                    &mut buf,
+                    4,
+                    left,
+                    15,
+                    76,
+                    "CUSTOM COLOR ROLES",
+                    &theme,
+                    Role::Accent,
+                    glyphs,
+                );
+                let roles = theme_role_rows(&theme);
+                for (i, (name, value)) in roles.iter().enumerate() {
+                    let row = 6 + i;
+                    if i == selected {
+                        put_inv(
+                            &mut buf,
+                            row,
+                            left + 3,
+                            &pad_right(
+                                &format!("{} {:<18} {:<14}", glyphs.selector, name, value),
+                                35,
+                            ),
+                            &theme,
+                            Role::Highlight,
+                        );
+                    } else {
+                        put(
+                            &mut buf,
+                            row,
+                            left + 3,
+                            &format!("  {:<18} {:<14}", name, value),
+                            &theme,
+                            Role::Normal,
+                            false,
+                        );
+                    }
+                }
+                draw_box(
+                    &mut buf,
+                    6,
+                    left + 42,
+                    8,
+                    30,
+                    "PREVIEW",
+                    &theme,
+                    Role::Accent,
+                    glyphs,
+                );
+                put(
+                    &mut buf,
+                    8,
+                    left + 45,
+                    "TUI Arcade",
+                    &theme,
+                    Role::Title,
+                    true,
+                );
+                put(
+                    &mut buf,
+                    9,
+                    left + 45,
+                    &format!("{} Space Invaders", glyphs.selector),
+                    &theme,
+                    Role::Highlight,
+                    true,
+                );
+                put(
+                    &mut buf,
+                    10,
+                    left + 45,
+                    "Player /A\\",
+                    &theme,
+                    Role::Accent,
+                    true,
+                );
+                put(
+                    &mut buf,
+                    11,
+                    left + 45,
+                    "Enemy <M>",
+                    &theme,
+                    Role::Danger,
+                    true,
+                );
+                put(
+                    &mut buf,
+                    12,
+                    left + 45,
+                    "Score 1200",
+                    &theme,
+                    Role::Success,
+                    true,
+                );
+                put(
+                    &mut buf,
+                    16,
+                    left + 3,
+                    &message,
+                    &theme,
+                    Role::Success,
+                    true,
+                );
+                center(&mut buf, rows - 2, "Up/Down role | Left/Right color | 0 bg default | P copy preset | R random | Q back", &theme, Role::Muted, true, cols);
+            }
+            flush(&buf);
+            dirty = false;
+        }
+        if let Some(key) = read_key() {
+            match key {
+                Key::Up | Key::Char('w') => selected = (selected + 8) % 9,
+                Key::Down | Key::Char('s') => selected = (selected + 1) % 9,
+                Key::Left | Key::Char('a') => {
+                    theme_role_adjust(state, selected, -1);
+                    message = "Custom color saved.".to_string();
+                }
+                Key::Right | Key::Char('d') => {
+                    theme_role_adjust(state, selected, 1);
+                    message = "Custom color saved.".to_string();
+                }
+                Key::Char('0') if selected == 1 => {
+                    let theme = state.custom_theme_mut();
+                    theme.bg = None;
+                    save_custom_theme(theme);
+                    message = "Custom background set to terminal default.".to_string();
+                }
+                Key::Char('p') => {
+                    let current = state.theme().clone();
+                    let custom = state.custom_theme_mut();
+                    *custom = current;
+                    custom.name = "Custom".to_string();
+                    save_custom_theme(custom);
+                    message = "Copied current preset into Custom.".to_string();
+                }
+                Key::Char('r') => {
+                    let colors = [
+                        state.rng.usize(16) as u8,
+                        state.rng.usize(16) as u8,
+                        state.rng.usize(16) as u8,
+                        state.rng.usize(16) as u8,
+                        state.rng.usize(16) as u8,
+                    ];
+                    let theme = state.custom_theme_mut();
+                    theme.title = colors[0];
+                    theme.accent = colors[1];
+                    theme.secondary = colors[2];
+                    theme.danger = colors[3];
+                    theme.success = colors[4];
+                    save_custom_theme(theme);
+                    message = "Randomized Custom.".to_string();
+                }
+                Key::Esc | Key::Char('q') => return,
+                _ => {}
+            }
+            dirty = true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn theme_role_rows(theme: &Theme) -> Vec<(String, String)> {
+    vec![
+        (
+            "Text".to_string(),
+            COLOR_NAMES[theme.fg as usize].to_string(),
+        ),
+        (
+            "Background".to_string(),
+            theme
+                .bg
+                .map(|c| COLOR_NAMES[c as usize].to_string())
+                .unwrap_or_else(|| "Terminal default".to_string()),
+        ),
+        (
+            "Title".to_string(),
+            COLOR_NAMES[theme.title as usize].to_string(),
+        ),
+        (
+            "Accent".to_string(),
+            COLOR_NAMES[theme.accent as usize].to_string(),
+        ),
+        (
+            "Secondary".to_string(),
+            COLOR_NAMES[theme.secondary as usize].to_string(),
+        ),
+        (
+            "Danger".to_string(),
+            COLOR_NAMES[theme.danger as usize].to_string(),
+        ),
+        (
+            "Success".to_string(),
+            COLOR_NAMES[theme.success as usize].to_string(),
+        ),
+        (
+            "Muted".to_string(),
+            COLOR_NAMES[theme.muted as usize].to_string(),
+        ),
+        (
+            "Highlight".to_string(),
+            COLOR_NAMES[theme.highlight as usize].to_string(),
+        ),
+    ]
+}
+
+fn theme_role_adjust(state: &mut AppState, selected: usize, delta: i32) {
+    let theme = state.custom_theme_mut();
+    match selected {
+        0 => theme.fg = wrap_color(theme.fg, delta),
+        1 => {
+            theme.bg = match theme.bg {
+                None if delta >= 0 => Some(0),
+                None => Some(15),
+                Some(color) => {
+                    let value = color as i32 + delta;
+                    if value < 0 || value > 15 {
+                        None
+                    } else {
+                        Some(value as u8)
+                    }
+                }
+            }
+        }
+        2 => theme.title = wrap_color(theme.title, delta),
+        3 => theme.accent = wrap_color(theme.accent, delta),
+        4 => theme.secondary = wrap_color(theme.secondary, delta),
+        5 => theme.danger = wrap_color(theme.danger, delta),
+        6 => theme.success = wrap_color(theme.success, delta),
+        7 => theme.muted = wrap_color(theme.muted, delta),
+        8 => theme.highlight = wrap_color(theme.highlight, delta),
+        _ => {}
+    }
+    save_custom_theme(theme);
+}
+
+fn play_game(state: &mut AppState, game: &GameInfo) {
+    match game.kind {
+        GameKind::Snake => game_snake(state),
+        GameKind::Tetris => game_tetris(state),
+        GameKind::Pong => game_pong(state),
+        GameKind::Invaders => game_invaders(state),
+        GameKind::Missile => game_missile(state),
+        GameKind::Breakout => game_breakout(state),
+        GameKind::Meteor => game_meteor(state),
+        GameKind::Racer => game_racer(state),
+        GameKind::Frog => game_frog(state),
+        GameKind::Target => game_target(state, "Target Practice", false),
+        GameKind::Coin => game_coin(state),
+        GameKind::Minefield => game_minefield(state),
+        GameKind::Maze => game_maze(state),
+        GameKind::Whack => game_target(state, "Whack-a-Mole", true),
+        GameKind::Simon => game_simon(state),
+        GameKind::Reaction => game_reaction(state),
+        GameKind::Flappy => game_flappy(state),
+        GameKind::Asteroid => {
+            game_side_scroll(state, "Asteroid Belt", "/A\\", "*", None, "WASD move")
+        }
+        GameKind::Star => game_star(state),
+        GameKind::Laser => game_laser(state),
+        GameKind::Dungeon => game_dungeon(state),
+        GameKind::River => game_side_scroll(
+            state,
+            "River Raid",
+            "/A\\",
+            "#",
+            Some("F"),
+            "WASD move, grab fuel",
+        ),
+        GameKind::Memory => game_memory(state),
+        GameKind::Number => game_number(state),
+        GameKind::Circuit => game_circuit(state),
+        GameKind::Orbit => game_orbit(state),
+        GameKind::BlockDrop => game_block_drop(state),
+        GameKind::CometCatcher => {
+            falling_game(state, "Comet Catcher", "[@]", Some("*"), "!", 15, false)
+        }
+        GameKind::BombSweeper => grid_exit_game(state, "Bomb Sweeper", true, false),
+        GameKind::NeonDrift => game_side_scroll(
+            state,
+            "Neon Drift",
+            "/A\\",
+            "|",
+            Some("+"),
+            "WASD drift, grab boosts",
+        ),
+        GameKind::CargoCatch => {
+            falling_game(state, "Cargo Catch", "[_]", Some("[]"), "XX", 12, false)
+        }
+        GameKind::GemRush => falling_game(state, "Gem Rush", "(@)", Some("$"), "x", 15, false),
+        GameKind::TrapRunner => grid_exit_game(state, "Trap Runner", true, false),
+        GameKind::ReactorTrace => grid_exit_game(state, "Reactor Trace", false, true),
+        GameKind::DroneDodge => {
+            game_side_scroll(state, "Drone Dodge", "<D>", "*", None, "WASD evade")
+        }
+        GameKind::PearlDiver => {
+            falling_game(state, "Pearl Diver", "{O}", Some("o"), "!", 15, false)
+        }
+        GameKind::SolarSailer => game_side_scroll(
+            state,
+            "Solar Sailer",
+            "/S\\",
+            "*",
+            Some("+"),
+            "WASD sail, grab charge",
+        ),
+        GameKind::VaultEscape => grid_exit_game(state, "Vault Escape", false, false),
+        GameKind::DataStorm => falling_game(state, "Data Storm", "[#]", Some("D"), "E", 10, false),
+        GameKind::PixelPop => game_pixel_pop(state),
+        GameKind::BugHunt => game_bug_hunt(state),
+        GameKind::FuelRun => game_side_scroll(
+            state,
+            "Fuel Run",
+            "/A\\",
+            "#",
+            Some("F"),
+            "WASD fly, grab fuel",
+        ),
+        GameKind::SparkChase => {
+            game_side_scroll(state, "Spark Chase", "<+>", "*", Some("o"), "WASD weave")
+        }
+        GameKind::IceSlide => grid_exit_game(state, "Ice Slide", false, false),
+        GameKind::SignalTrace => grid_exit_game(state, "Signal Trace", false, true),
+        GameKind::OrbitalCourier => game_side_scroll(
+            state,
+            "Orbital Courier",
+            "[O]",
+            "*",
+            Some("@"),
+            "WASD courier",
+        ),
+        GameKind::RainRunner => {
+            falling_game(state, "Rain Runner", "/A\\", Some("*"), "!", 12, false)
+        }
+        GameKind::ByteBlaster => game_byte_blaster(state),
+        GameKind::StormSurge => game_side_scroll(
+            state,
+            "Storm Surge",
+            "/A\\",
+            "~",
+            Some("F"),
+            "WASD surf, grab fuel",
+        ),
+        GameKind::CrystalCavern => grid_exit_game(state, "Crystal Cavern", false, false),
+        GameKind::TicTacToe => game_tic_tac_toe(state),
+        GameKind::Micro(index) => {
+            if let Some(spec) = MICRO_GAMES.get(index) {
+                play_micro_game(state, game.name, *spec);
+            } else {
+                let _ = wait_menu(
+                    state,
+                    game.name,
+                    &["This game pack entry is missing.".to_string()],
+                    false,
+                );
+            }
+        }
+    }
+}
+
+fn play_micro_game(state: &mut AppState, name: &str, spec: MicroGame) {
+    match spec.mode {
+        MicroMode::ConnectFour => game_connect_four(state, name),
+        MicroMode::WordGuess(kind) => game_word_guess(state, name, kind),
+        MicroMode::Blackjack => game_blackjack(state, name),
+        MicroMode::BlackjackBlitz => game_blackjack_blitz(state, name),
+        MicroMode::Battleship => game_battleship(state, name),
+        MicroMode::TowerStack => game_tower_stack(state, name),
+        MicroMode::LightsOut => game_lights_out(state, name),
+        MicroMode::SlidePuzzle => game_slide_puzzle(state, name),
+        MicroMode::DominoChain => game_domino_chain(state, name),
+        MicroMode::MiniGolf => game_mini_golf(state, name),
+        MicroMode::Darts => game_darts(state, name),
+        MicroMode::Mancala => game_mancala(state, name),
+        MicroMode::MiniSudoku => game_mini_sudoku(state, name),
+        MicroMode::Reversi => game_reversi(state, name),
+        MicroMode::Bowling => game_bowling(state, name),
+        MicroMode::SkeeBall => game_skee_ball(state, name),
+        MicroMode::Keeper => game_keeper(state, name),
+        MicroMode::Quest(kind) => game_micro_quest(state, name, kind),
+        MicroMode::Lane(kind) => game_micro_lane(state, name, kind),
+        MicroMode::Catch(kind) => game_micro_catch(state, name, kind),
+        MicroMode::Aim(kind) => game_micro_aim(state, name, kind),
+        MicroMode::Sequence(kind) => game_micro_sequence(state, name, kind),
+    }
+}
+
+fn game_tic_tac_toe(state: &mut AppState) {
+    if !require_size(state, 20, 54, "Tic Tac Toe") {
+        return;
+    }
+    loop {
+        let mut board = [' '; 9];
+        let mut cursor = 4usize;
+        let mut message = "Your move. You are X.".to_string();
+        let mut moves = 0u32;
+        let mut finished = false;
+        let mut score = 0u32;
+        while !finished {
+            draw_tic_tac_toe(state, &board, cursor, &message, score);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 3 => cursor -= 3,
+                    Key::Down | Key::Char('s') if cursor < 6 => cursor += 3,
+                    Key::Left | Key::Char('a') if cursor % 3 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 3 < 2 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        if board[cursor] != ' ' {
+                            message = "That square is taken.".to_string();
+                            play_sound(state, "wall");
+                            continue;
+                        }
+                        board[cursor] = 'X';
+                        moves += 1;
+                        if ttt_winner(&board) == Some('X') {
+                            score = 400u32.saturating_sub(moves * 20);
+                            message = "You made three in a row.".to_string();
+                            play_sound(state, "score");
+                            finished = true;
+                            continue;
+                        }
+                        if ttt_full(&board) {
+                            score = 125;
+                            message = "Draw board. No clean line.".to_string();
+                            finished = true;
+                            continue;
+                        }
+                        let cpu = ttt_cpu_move(&board, state);
+                        board[cpu] = 'O';
+                        if ttt_winner(&board) == Some('O') {
+                            score = 25;
+                            message = "CPU found the line.".to_string();
+                            play_sound(state, "alert");
+                            finished = true;
+                        } else if ttt_full(&board) {
+                            score = 125;
+                            message = "Draw board. No clean line.".to_string();
+                            finished = true;
+                        } else {
+                            message = "CPU moved. Find the line.".to_string();
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        draw_tic_tac_toe(state, &board, cursor, &message, score);
+        record_score(state, "Tic Tac Toe", score);
+        if !wait_menu(
+            state,
+            "Tic Tac Toe",
+            &[message, format!("Score: {score}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn ttt_winner(board: &[char; 9]) -> Option<char> {
+    const LINES: [[usize; 3]; 8] = [
+        [0, 1, 2],
+        [3, 4, 5],
+        [6, 7, 8],
+        [0, 3, 6],
+        [1, 4, 7],
+        [2, 5, 8],
+        [0, 4, 8],
+        [2, 4, 6],
+    ];
+    for line in LINES {
+        let mark = board[line[0]];
+        if mark != ' ' && board[line[1]] == mark && board[line[2]] == mark {
+            return Some(mark);
+        }
+    }
+    None
+}
+
+fn ttt_full(board: &[char; 9]) -> bool {
+    board.iter().all(|&mark| mark != ' ')
+}
+
+fn ttt_cpu_move(board: &[char; 9], state: &mut AppState) -> usize {
+    for mark in ['O', 'X'] {
+        for index in 0..9 {
+            if board[index] != ' ' {
+                continue;
+            }
+            let mut test = *board;
+            test[index] = mark;
+            if ttt_winner(&test) == Some(mark) {
+                return index;
+            }
+        }
+    }
+    if board[4] == ' ' {
+        return 4;
+    }
+    let corners: Vec<usize> = [0, 2, 6, 8]
+        .into_iter()
+        .filter(|&index| board[index] == ' ')
+        .collect();
+    if !corners.is_empty() {
+        return corners[state.rng.usize(corners.len())];
+    }
+    let empties: Vec<usize> = (0..9).filter(|&index| board[index] == ' ').collect();
+    empties[state.rng.usize(empties.len())]
+}
+
+fn draw_tic_tac_toe(state: &AppState, board: &[char; 9], cursor: usize, message: &str, score: u32) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 1, "TIC TAC TOE", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        3,
+        &format!("Score {score}   Move cursor, Enter/Space place X, Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let top = rows / 2 - 4;
+    let left = cols / 2 - 10;
+    for y in 0..3 {
+        for x in 0..3 {
+            let index = y * 3 + x;
+            let mark = if board[index] == ' ' {
+                (index + 1).to_string()
+            } else {
+                board[index].to_string()
+            };
+            let text = format!("  {mark}  ");
+            let row = top + y * 3;
+            let col = left + x * 7;
+            if index == cursor {
+                put_inv(&mut buf, row, col, &text, &theme, Role::Highlight);
+            } else {
+                let role = match board[index] {
+                    'X' => Role::Success,
+                    'O' => Role::Danger,
+                    _ => Role::Muted,
+                };
+                put(&mut buf, row, col, &text, &theme, role, board[index] != ' ');
+            }
+        }
+    }
+    for y in [top + 1, top + 4] {
+        put(
+            &mut buf,
+            y,
+            left,
+            "-----+-----+-----",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    for y in 0..7 {
+        put(&mut buf, top + y, left + 5, "|", &theme, Role::Muted, false);
+        put(
+            &mut buf,
+            top + y,
+            left + 12,
+            "|",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    center(
+        &mut buf,
+        top + 9,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_connect_four(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 60, name) {
+        return;
+    }
+    loop {
+        let mut board = [' '; 42];
+        let mut cursor = 3usize;
+        let mut moves = 0u32;
+        let mut score = 0u32;
+        let mut message = "Drop X pieces. Connect four before the CPU.".to_string();
+        let mut finished = false;
+        while !finished {
+            draw_connect_four(state, name, &board, cursor, &message, score);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Left | Key::Char('a') if cursor > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor < 6 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        if !cf_drop(&mut board, cursor, 'X') {
+                            message = "That column is full.".to_string();
+                            play_sound(state, "wall");
+                            continue;
+                        }
+                        moves += 1;
+                        if cf_winner(&board) == Some('X') {
+                            score = 700u32.saturating_sub(moves * 18);
+                            message = "You connected four.".to_string();
+                            play_sound(state, "score");
+                            finished = true;
+                            continue;
+                        }
+                        if cf_full(&board) {
+                            score = 150;
+                            message = "Board filled. Draw.".to_string();
+                            finished = true;
+                            continue;
+                        }
+                        let cpu_col = cf_cpu_column(&board, state);
+                        let _ = cf_drop(&mut board, cpu_col, 'O');
+                        if cf_winner(&board) == Some('O') {
+                            score = 40;
+                            message = "CPU connected four.".to_string();
+                            play_sound(state, "alert");
+                            finished = true;
+                        } else if cf_full(&board) {
+                            score = 150;
+                            message = "Board filled. Draw.".to_string();
+                            finished = true;
+                        } else {
+                            message = format!("CPU dropped in column {}.", cpu_col + 1);
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        draw_connect_four(state, name, &board, cursor, &message, score);
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[message, format!("Score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn cf_drop(board: &mut [char; 42], col: usize, mark: char) -> bool {
+    for row in (0..6).rev() {
+        let index = row * 7 + col;
+        if board[index] == ' ' {
+            board[index] = mark;
+            return true;
+        }
+    }
+    false
+}
+
+fn cf_full(board: &[char; 42]) -> bool {
+    board.iter().all(|&cell| cell != ' ')
+}
+
+fn cf_winner(board: &[char; 42]) -> Option<char> {
+    let directions = [(1i32, 0i32), (0, 1), (1, 1), (1, -1)];
+    for row in 0..6 {
+        for col in 0..7 {
+            let mark = board[row * 7 + col];
+            if mark == ' ' {
+                continue;
+            }
+            for (dx, dy) in directions {
+                let mut count = 1;
+                for step in 1..4 {
+                    let x = col as i32 + dx * step;
+                    let y = row as i32 + dy * step;
+                    if !(0..7).contains(&x) || !(0..6).contains(&y) {
+                        break;
+                    }
+                    if board[y as usize * 7 + x as usize] == mark {
+                        count += 1;
+                    }
+                }
+                if count == 4 {
+                    return Some(mark);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn cf_cpu_column(board: &[char; 42], state: &mut AppState) -> usize {
+    let available: Vec<usize> = (0..7).filter(|&col| board[col] == ' ').collect();
+    for mark in ['O', 'X'] {
+        for &col in &available {
+            let mut test = *board;
+            let _ = cf_drop(&mut test, col, mark);
+            if cf_winner(&test) == Some(mark) {
+                return col;
+            }
+        }
+    }
+    if available.contains(&3) {
+        3
+    } else {
+        available[state.rng.usize(available.len())]
+    }
+}
+
+fn draw_connect_four(
+    state: &AppState,
+    name: &str,
+    board: &[char; 42],
+    cursor: usize,
+    message: &str,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Score {score}   A/D choose column   Space drops   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let top = rows / 2 - 7;
+    let left = cols / 2 - 15;
+    for col in 0..7 {
+        let marker = if col == cursor { "v" } else { " " };
+        put(
+            &mut buf,
+            top,
+            left + col * 4 + 1,
+            marker,
+            &theme,
+            Role::Highlight,
+            true,
+        );
+    }
+    for row in 0..6 {
+        for col in 0..7 {
+            let mark = board[row * 7 + col];
+            let text = format!("[{}]", if mark == ' ' { '.' } else { mark });
+            let role = match mark {
+                'X' => Role::Success,
+                'O' => Role::Danger,
+                _ => Role::Muted,
+            };
+            put(
+                &mut buf,
+                top + 2 + row * 2,
+                left + col * 4,
+                &text,
+                &theme,
+                role,
+                mark != ' ',
+            );
+        }
+    }
+    center(
+        &mut buf,
+        top + 15,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_word_guess(state: &mut AppState, name: &str, kind: WordKind) {
+    const WORDS: [&str; 18] = [
+        "arcade", "terminal", "cipher", "wizard", "volcano", "galaxy", "crystal", "signal",
+        "pirate", "robot", "jungle", "dragon", "mirror", "rocket", "castle", "meteor", "circuit",
+        "potion",
+    ];
+    const VAULT_WORDS: [&str; 10] = [
+        "cipher", "signal", "circuit", "terminal", "rocket", "galaxy", "mirror", "crystal",
+        "arcade", "meteor",
+    ];
+    loop {
+        let word = match kind {
+            WordKind::Vault => VAULT_WORDS[state.rng.usize(VAULT_WORDS.len())],
+            WordKind::Hangman => WORDS[state.rng.usize(WORDS.len())],
+        };
+        let mut guessed = HashSet::new();
+        let mut wrong = Vec::new();
+        let max_wrong = match kind {
+            WordKind::Vault => match state.difficulty_index {
+                0 => 5,
+                1 => 4,
+                _ => 3,
+            },
+            WordKind::Hangman => match state.difficulty_index {
+                0 => 8,
+                1 => 6,
+                _ => 5,
+            },
+        };
+        let mut message = match kind {
+            WordKind::Vault => "Crack the vault with fewer misses.".to_string(),
+            WordKind::Hangman => "Type letters. Esc quits.".to_string(),
+        };
+        let mut won = false;
+        while wrong.len() < max_wrong && !won {
+            draw_word_guess(state, name, word, &guessed, &wrong, max_wrong, &message);
+            let Some(key) = wait_for_text_key() else {
+                return;
+            };
+            match key {
+                Key::Esc => return,
+                Key::Char(ch) if ch.is_ascii_alphabetic() => {
+                    let ch = ch.to_ascii_lowercase();
+                    if guessed.contains(&ch) || wrong.contains(&ch) {
+                        message = format!("Already tried {}.", ch.to_ascii_uppercase());
+                    } else if word.contains(ch) {
+                        guessed.insert(ch);
+                        message = "Good letter.".to_string();
+                        play_sound(state, "score");
+                    } else {
+                        wrong.push(ch);
+                        message = "Nope.".to_string();
+                        play_sound(state, "wall");
+                    }
+                    won = word.chars().all(|letter| guessed.contains(&letter));
+                }
+                _ => {}
+            }
+        }
+        let score = if won {
+            let base: u32 = if matches!(kind, WordKind::Vault) {
+                650
+            } else {
+                500
+            };
+            base.saturating_sub(wrong.len() as u32 * 35) + guessed.len() as u32 * 10
+        } else {
+            guessed.len() as u32 * 15
+        };
+        record_score(state, name, score);
+        let result = if won {
+            format!("Solved: {word}. Score: {score}")
+        } else {
+            format!("Word was {word}. Score: {score}")
+        };
+        if !wait_menu(state, name, &[result], true) {
+            return;
+        }
+    }
+}
+
+fn wait_for_text_key() -> Option<Key> {
+    loop {
+        if let Some(key) = read_text_key() {
+            return Some(key);
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
+}
+
+fn draw_word_guess(
+    state: &AppState,
+    name: &str,
+    word: &str,
+    guessed: &HashSet<char>,
+    wrong: &[char],
+    max_wrong: usize,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        rows / 2 - 7,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    let hidden: String = word
+        .chars()
+        .map(|ch| {
+            if guessed.contains(&ch) {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .flat_map(|ch| [ch, ' '])
+        .collect();
+    center(
+        &mut buf,
+        rows / 2 - 3,
+        &hidden,
+        &theme,
+        Role::Highlight,
+        true,
+        cols,
+    );
+    let wrong_text: String = wrong
+        .iter()
+        .map(|ch| ch.to_ascii_uppercase().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    center(
+        &mut buf,
+        rows / 2,
+        &format!("Wrong {}/{}: {}", wrong.len(), max_wrong, wrong_text),
+        &theme,
+        if wrong.len() + 1 >= max_wrong {
+            Role::Danger
+        } else {
+            Role::Accent
+        },
+        false,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 3,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 6,
+        "Type letters. Esc returns to menu.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_blackjack(state: &mut AppState, name: &str) {
+    loop {
+        let mut player = vec![draw_blackjack_card(state), draw_blackjack_card(state)];
+        let mut dealer = vec![draw_blackjack_card(state), draw_blackjack_card(state)];
+        let mut message = "Space hits. Right/Down stands.".to_string();
+        let mut standing = false;
+        let mut finished = false;
+        let mut score = 0u32;
+        while !finished {
+            draw_blackjack(state, name, &player, &dealer, standing, &message, score);
+            if blackjack_value(&player) > 21 {
+                message = "Bust. Dealer wins.".to_string();
+                score = 10;
+                finished = true;
+                continue;
+            }
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Enter | Key::Space | Key::Char('h') if !standing => {
+                        player.push(draw_blackjack_card(state));
+                        play_sound(state, "wall");
+                    }
+                    Key::Right | Key::Down | Key::Char('d') | Key::Char('s') => {
+                        standing = true;
+                        while blackjack_value(&dealer) < 17 {
+                            dealer.push(draw_blackjack_card(state));
+                        }
+                        let player_value = blackjack_value(&player);
+                        let dealer_value = blackjack_value(&dealer);
+                        if dealer_value > 21 || player_value > dealer_value {
+                            score = 250 + player_value as u32 * 5;
+                            message = "You beat the dealer.".to_string();
+                            play_sound(state, "score");
+                        } else if player_value == dealer_value {
+                            score = 100;
+                            message = "Push.".to_string();
+                        } else {
+                            score = 25;
+                            message = "Dealer holds the better hand.".to_string();
+                            play_sound(state, "alert");
+                        }
+                        finished = true;
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        draw_blackjack(state, name, &player, &dealer, true, &message, score);
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[message, format!("Score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn game_blackjack_blitz(state: &mut AppState, name: &str) {
+    loop {
+        let mut hand = Vec::new();
+        let mut draws = 0u32;
+        let mut message = "Space draws. Right/Down banks the hand.".to_string();
+        let mut finished = false;
+        while !finished {
+            let total = blackjack_value(&hand);
+            draw_blackjack_blitz(state, name, &hand, draws, &message);
+            if total > 21 || total == 21 || draws >= 5 {
+                finished = true;
+                continue;
+            }
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Enter | Key::Space => {
+                        hand.push(draw_blackjack_card(state));
+                        draws += 1;
+                        play_sound(state, "wall");
+                    }
+                    Key::Right | Key::Down | Key::Char('d') | Key::Char('s') => {
+                        finished = true;
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            let total = blackjack_value(&hand);
+            message = if total > 21 {
+                "Bust.".to_string()
+            } else if total == 21 {
+                "Blackjack.".to_string()
+            } else {
+                format!("Total {total}. Draw or bank.")
+            };
+        }
+        let total = blackjack_value(&hand);
+        let score = if total > 21 {
+            0
+        } else {
+            600u32.saturating_sub((21 - total as i32).unsigned_abs() * 45) + draws * 15
+        };
+        draw_blackjack_blitz(state, name, &hand, draws, "Round over.");
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[format!("Total {total}. Score: {score}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_blackjack_blitz(state: &AppState, name: &str, hand: &[u8], draws: u32, message: &str) {
+    let (_, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let cards = blackjack_hand_text(hand, false);
+    let total = blackjack_value(hand);
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        5,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        9,
+        &format!("Draws {draws}/5   Total {total}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    center(&mut buf, 12, &cards, &theme, Role::Success, true, cols);
+    center(&mut buf, 16, message, &theme, Role::Secondary, true, cols);
+    center(
+        &mut buf,
+        18,
+        "Space draw   Right/Down bank   Q menu",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn draw_blackjack_card(state: &mut AppState) -> u8 {
+    state.rng.range(1, 13) as u8
+}
+
+fn blackjack_value(cards: &[u8]) -> u8 {
+    let mut total = 0u8;
+    let mut aces = 0u8;
+    for &card in cards {
+        match card {
+            1 => {
+                total += 11;
+                aces += 1;
+            }
+            11..=13 => total += 10,
+            value => total += value,
+        }
+    }
+    while total > 21 && aces > 0 {
+        total -= 10;
+        aces -= 1;
+    }
+    total
+}
+
+fn blackjack_card_label(card: u8) -> &'static str {
+    match card {
+        1 => "A",
+        11 => "J",
+        12 => "Q",
+        13 => "K",
+        10 => "10",
+        9 => "9",
+        8 => "8",
+        7 => "7",
+        6 => "6",
+        5 => "5",
+        4 => "4",
+        3 => "3",
+        _ => "2",
+    }
+}
+
+fn blackjack_hand_text(cards: &[u8], hide_first: bool) -> String {
+    cards
+        .iter()
+        .enumerate()
+        .map(|(index, &card)| {
+            if hide_first && index == 0 {
+                "[?]".to_string()
+            } else {
+                format!("[{}]", blackjack_card_label(card))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn draw_blackjack(
+    state: &AppState,
+    name: &str,
+    player: &[u8],
+    dealer: &[u8],
+    standing: bool,
+    message: &str,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        rows / 2 - 8,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 - 5,
+        &format!(
+            "Dealer: {}   {}",
+            blackjack_hand_text(dealer, !standing),
+            if standing {
+                format!("({})", blackjack_value(dealer))
+            } else {
+                "(hidden)".to_string()
+            }
+        ),
+        &theme,
+        Role::Danger,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 - 1,
+        &format!(
+            "Player: {}   ({})",
+            blackjack_hand_text(player, false),
+            blackjack_value(player)
+        ),
+        &theme,
+        Role::Success,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 3,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 6,
+        &format!("Score {score}   Space/Enter hit   Right/Down stand   Q menu"),
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_battleship(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 58, name) {
+        return;
+    }
+    loop {
+        let ships = make_battleship_fleet(state);
+        let mut shots = HashSet::new();
+        let mut cursor = (0usize, 0usize);
+        let mut torpedoes = match state.difficulty_index {
+            0 => 36,
+            1 => 30,
+            _ => 25,
+        };
+        let mut message = "Find every ship cell.".to_string();
+        let mut won = false;
+        while torpedoes > 0 && !won {
+            let hits = shots.iter().filter(|point| ships.contains(point)).count();
+            draw_battleship(
+                state, name, &ships, &shots, cursor, torpedoes, hits, &message,
+            );
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor.1 > 0 => cursor.1 -= 1,
+                    Key::Down | Key::Char('s') if cursor.1 < 7 => cursor.1 += 1,
+                    Key::Left | Key::Char('a') if cursor.0 > 0 => cursor.0 -= 1,
+                    Key::Right | Key::Char('d') if cursor.0 < 7 => cursor.0 += 1,
+                    Key::Enter | Key::Space => {
+                        if shots.insert(cursor) {
+                            torpedoes -= 1;
+                            if ships.contains(&cursor) {
+                                message = "Hit.".to_string();
+                                play_sound(state, "score");
+                            } else {
+                                let nearby = ships
+                                    .iter()
+                                    .filter(|&&(x, y)| {
+                                        (x as i32 - cursor.0 as i32).abs() <= 1
+                                            && (y as i32 - cursor.1 as i32).abs() <= 1
+                                    })
+                                    .count();
+                                message = format!("Miss. Radar pings nearby: {nearby}.");
+                                play_sound(state, "wall");
+                            }
+                            won = ships.iter().all(|point| shots.contains(point));
+                        } else {
+                            message = "Already fired there.".to_string();
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let hits = shots.iter().filter(|point| ships.contains(point)).count() as u32;
+        let score = if won {
+            700 + torpedoes as u32 * 12
+        } else {
+            hits * 40
+        };
+        record_score(state, name, score);
+        let result = if won {
+            "Fleet sunk.".to_string()
+        } else {
+            "Out of torpedoes.".to_string()
+        };
+        if !wait_menu(state, name, &[result, format!("Score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn make_battleship_fleet(state: &mut AppState) -> HashSet<(usize, usize)> {
+    let mut ships = HashSet::new();
+    for length in [4usize, 3, 3, 2, 2] {
+        for _ in 0..200 {
+            let horizontal = state.rng.chance(1, 2);
+            let x = state.rng.usize(if horizontal { 9 - length } else { 8 });
+            let y = state.rng.usize(if horizontal { 8 } else { 9 - length });
+            let cells: Vec<_> = (0..length)
+                .map(|offset| {
+                    if horizontal {
+                        (x + offset, y)
+                    } else {
+                        (x, y + offset)
+                    }
+                })
+                .collect();
+            if cells.iter().all(|cell| !ships.contains(cell)) {
+                for cell in cells {
+                    ships.insert(cell);
+                }
+                break;
+            }
+        }
+    }
+    ships
+}
+
+fn draw_battleship(
+    state: &AppState,
+    name: &str,
+    ships: &HashSet<(usize, usize)>,
+    shots: &HashSet<(usize, usize)>,
+    cursor: (usize, usize),
+    torpedoes: i32,
+    hits: usize,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Hits {hits}/{}   Torpedoes {torpedoes}", ships.len()),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let top = rows / 2 - 8;
+    let left = cols / 2 - 16;
+    for y in 0..8 {
+        for x in 0..8 {
+            let point = (x, y);
+            let fired = shots.contains(&point);
+            let text = if fired && ships.contains(&point) {
+                "[X]"
+            } else if fired {
+                "[.]"
+            } else {
+                "[ ]"
+            };
+            if point == cursor {
+                put_inv(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 4,
+                    text,
+                    &theme,
+                    Role::Highlight,
+                );
+            } else {
+                put(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 4,
+                    text,
+                    &theme,
+                    if fired && ships.contains(&point) {
+                        Role::Danger
+                    } else if fired {
+                        Role::Muted
+                    } else {
+                        Role::Normal
+                    },
+                    fired,
+                );
+            }
+        }
+    }
+    center(
+        &mut buf,
+        top + 18,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        top + 20,
+        "Move cursor, Space fires, radar reports adjacent ship cells.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_tower_stack(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    loop {
+        let board_w = 32i32;
+        let layers_goal = 13usize;
+        let mut settled: Vec<(i32, i32)> = Vec::new();
+        let mut block_x = 0i32;
+        let mut block_w = 11i32;
+        let mut dir = 1i32;
+        let mut score = 0u32;
+        let mut failed = false;
+        while settled.len() < layers_goal && !failed {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Enter | Key::Space => {
+                        if let Some(&(prev_x, prev_w)) = settled.last() {
+                            let start = block_x.max(prev_x);
+                            let end = (block_x + block_w).min(prev_x + prev_w);
+                            if end <= start {
+                                failed = true;
+                                play_sound(state, "alert");
+                            } else {
+                                block_x = start;
+                                block_w = end - start;
+                                settled.push((block_x, block_w));
+                                score += 40 + block_w as u32 * 4;
+                                play_sound(state, "score");
+                            }
+                        } else {
+                            settled.push((block_x, block_w));
+                            score += 40 + block_w as u32 * 4;
+                            play_sound(state, "score");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if !failed && settled.len() < layers_goal {
+                block_x += dir;
+                if block_x <= 0 || block_x + block_w >= board_w {
+                    dir = -dir;
+                    block_x = block_x.clamp(0, board_w - block_w);
+                }
+            }
+            draw_tower_stack(
+                state,
+                name,
+                board_w,
+                layers_goal,
+                &settled,
+                block_x,
+                block_w,
+                score,
+            );
+            let tick = (state.difficulty().tick_ms as f64 * 0.55) as u64;
+            sleep_frame(frame, tick.max(22));
+        }
+        if settled.len() >= layers_goal {
+            score += 500;
+        }
+        record_score(state, name, score);
+        let result = if failed {
+            "The stack slipped.".to_string()
+        } else {
+            "Tower complete.".to_string()
+        };
+        if !wait_menu(state, name, &[result, format!("Score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn draw_tower_stack(
+    state: &AppState,
+    name: &str,
+    board_w: i32,
+    layers_goal: usize,
+    settled: &[(i32, i32)],
+    block_x: i32,
+    block_w: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - layers_goal / 2 - 2;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!(
+            "Score {score}   Layer {}/{}   Space locks the moving block",
+            settled.len() + 1,
+            layers_goal
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        layers_goal + 4,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for (index, &(x, w)) in settled.iter().enumerate() {
+        let y = top + layers_goal - index;
+        put(
+            &mut buf,
+            y,
+            left + x as usize,
+            &"#".repeat(w as usize),
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    if settled.len() < layers_goal {
+        let y = top + layers_goal - settled.len();
+        put(
+            &mut buf,
+            y,
+            left + block_x as usize,
+            &"=".repeat(block_w as usize),
+            &theme,
+            Role::Highlight,
+            true,
+        );
+    }
+    flush(&buf);
+}
+
+fn game_lights_out(state: &mut AppState, name: &str) {
+    loop {
+        let mut board = [false; 25];
+        let toggles = match state.difficulty_index {
+            0 => 9,
+            1 => 13,
+            _ => 17,
+        };
+        for _ in 0..toggles {
+            let index = state.rng.usize(25);
+            lights_toggle(&mut board, index % 5, index / 5);
+        }
+        let mut cursor = 12usize;
+        let mut moves = 0u32;
+        while board.iter().any(|&on| on) {
+            draw_lights_out(state, name, &board, cursor, moves);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 5 => cursor -= 5,
+                    Key::Down | Key::Char('s') if cursor < 20 => cursor += 5,
+                    Key::Left | Key::Char('a') if cursor % 5 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 5 < 4 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        lights_toggle(&mut board, cursor % 5, cursor / 5);
+                        moves += 1;
+                        play_sound(state, "wall");
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let score = 650u32.saturating_sub(moves * 18);
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("All lights out. Score: {score}"),
+                format!("Moves: {moves}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn lights_toggle(board: &mut [bool; 25], x: usize, y: usize) {
+    for (dx, dy) in [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+        let nx = x as i32 + dx;
+        let ny = y as i32 + dy;
+        if (0..5).contains(&nx) && (0..5).contains(&ny) {
+            let index = ny as usize * 5 + nx as usize;
+            board[index] = !board[index];
+        }
+    }
+}
+
+fn draw_lights_out(state: &AppState, name: &str, board: &[bool; 25], cursor: usize, moves: u32) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Moves {moves}   Space toggles a plus shape   Clear every light"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let top = rows / 2 - 5;
+    let left = cols / 2 - 10;
+    for y in 0..5 {
+        for x in 0..5 {
+            let index = y * 5 + x;
+            let text = if board[index] { "[*]" } else { "[.]" };
+            if index == cursor {
+                put_inv(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 4,
+                    text,
+                    &theme,
+                    Role::Highlight,
+                );
+            } else {
+                put(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 4,
+                    text,
+                    &theme,
+                    if board[index] {
+                        Role::Success
+                    } else {
+                        Role::Muted
+                    },
+                    board[index],
+                );
+            }
+        }
+    }
+    flush(&buf);
+}
+
+fn game_domino_chain(state: &mut AppState, name: &str) {
+    loop {
+        let mut hand: Vec<(u8, u8)> = (0..7)
+            .map(|_| (state.rng.range(0, 6) as u8, state.rng.range(0, 6) as u8))
+            .collect();
+        let mut open = state.rng.range(0, 6) as u8;
+        let mut cursor = 0usize;
+        let mut score = 0u32;
+        let mut plays = 0u32;
+        let mut message = "Choose a domino matching the open end.".to_string();
+        while !hand.is_empty() && hand.iter().any(|&(a, b)| a == open || b == open) {
+            draw_domino_chain(state, name, &hand, open, cursor, score, &message);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Left | Key::Char('a') if cursor > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor + 1 < hand.len() => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        let (a, b) = hand[cursor];
+                        if a == open || b == open {
+                            open = if a == open { b } else { a };
+                            score += 40 + (a as u32 + b as u32) * 3;
+                            plays += 1;
+                            hand.remove(cursor);
+                            if cursor >= hand.len() && cursor > 0 {
+                                cursor -= 1;
+                            }
+                            message = format!("Chain length {plays}. Open end is {open}.");
+                            play_sound(state, "score");
+                        } else {
+                            message = format!("Needs a {open} on either side.");
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        if hand.is_empty() {
+            score += 300;
+        }
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Chain ended. Score: {score}"),
+                format!("Played: {plays}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_domino_chain(
+    state: &AppState,
+    name: &str,
+    hand: &[(u8, u8)],
+    open: u8,
+    cursor: usize,
+    score: u32,
+    message: &str,
+) {
+    let (_, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        4,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        7,
+        &format!("Open end: {open}   Score {score}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let row = hand
+        .iter()
+        .enumerate()
+        .map(|(index, &(a, b))| {
+            if index == cursor {
+                format!(">{{{a}|{b}}}<")
+            } else {
+                format!(" [{a}|{b}] ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    center(&mut buf, 11, &row, &theme, Role::Success, true, cols);
+    center(&mut buf, 15, message, &theme, Role::Secondary, true, cols);
+    center(
+        &mut buf,
+        18,
+        "A/D choose   Space plays matching domino",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_slide_puzzle(state: &mut AppState, name: &str) {
+    loop {
+        let mut tiles = [1u8, 2, 3, 4, 5, 6, 7, 8, 0];
+        let mut blank = 8usize;
+        for _ in 0..(80 + state.difficulty_index * 40) {
+            let moves = slide_neighbors(blank);
+            let next = moves[state.rng.usize(moves.len())];
+            tiles.swap(blank, next);
+            blank = next;
+        }
+        let mut moves_count = 0u32;
+        while tiles != [1, 2, 3, 4, 5, 6, 7, 8, 0] {
+            draw_slide_puzzle(state, name, &tiles, blank, moves_count);
+            if let Some(key) = wait_for_key() {
+                let target = match key {
+                    Key::Up | Key::Char('w') if blank < 6 => Some(blank + 3),
+                    Key::Down | Key::Char('s') if blank >= 3 => Some(blank - 3),
+                    Key::Left | Key::Char('a') if blank % 3 < 2 => Some(blank + 1),
+                    Key::Right | Key::Char('d') if blank % 3 > 0 => Some(blank - 1),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                        None
+                    }
+                    _ if is_quit(key) => return,
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    tiles.swap(blank, target);
+                    blank = target;
+                    moves_count += 1;
+                    play_sound(state, "wall");
+                }
+            }
+        }
+        let score = 900u32.saturating_sub(moves_count * 8);
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Solved. Score: {score}"),
+                format!("Moves: {moves_count}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn slide_neighbors(blank: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let x = blank % 3;
+    let y = blank / 3;
+    if x > 0 {
+        out.push(blank - 1);
+    }
+    if x < 2 {
+        out.push(blank + 1);
+    }
+    if y > 0 {
+        out.push(blank - 3);
+    }
+    if y < 2 {
+        out.push(blank + 3);
+    }
+    out
+}
+
+fn draw_slide_puzzle(
+    state: &AppState,
+    name: &str,
+    tiles: &[u8; 9],
+    blank: usize,
+    moves_count: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Moves {moves_count}   Move tiles into the blank space"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let top = rows / 2 - 4;
+    let left = cols / 2 - 9;
+    for y in 0..3 {
+        for x in 0..3 {
+            let index = y * 3 + x;
+            let text = if tiles[index] == 0 {
+                "     ".to_string()
+            } else {
+                format!(" [{}] ", tiles[index])
+            };
+            if index == blank {
+                put_inv(
+                    &mut buf,
+                    top + y * 3,
+                    left + x * 6,
+                    &text,
+                    &theme,
+                    Role::Highlight,
+                );
+            } else {
+                put(
+                    &mut buf,
+                    top + y * 3,
+                    left + x * 6,
+                    &text,
+                    &theme,
+                    Role::Success,
+                    true,
+                );
+            }
+        }
+    }
+    flush(&buf);
+}
+
+fn game_mini_golf(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    loop {
+        let (w, h) = (38i32, 16i32);
+        let start = (2, h - 2);
+        let hole = (w - 3, 1);
+        let walls = make_golf_course(state, w, h);
+        let mut ball = start;
+        let mut aim = (1, 0);
+        let mut shots = 0u32;
+        let max_shots = match state.difficulty_index {
+            0 => 18,
+            1 => 15,
+            _ => 12,
+        };
+        let mut won = false;
+        while shots < max_shots && !won {
+            draw_mini_golf(state, name, w, h, ball, hole, &walls, aim, shots, max_shots);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') => aim = (0, -1),
+                    Key::Down | Key::Char('s') => aim = (0, 1),
+                    Key::Left | Key::Char('a') => aim = (-1, 0),
+                    Key::Right | Key::Char('d') => aim = (1, 0),
+                    Key::Enter | Key::Space => {
+                        shots += 1;
+                        for _ in 0..w {
+                            let next = (ball.0 + aim.0, ball.1 + aim.1);
+                            if next == hole {
+                                ball = next;
+                                won = true;
+                                play_sound(state, "score");
+                                break;
+                            }
+                            if next.0 <= 0
+                                || next.0 >= w - 1
+                                || next.1 <= 0
+                                || next.1 >= h - 1
+                                || walls.contains(&next)
+                            {
+                                play_sound(state, "wall");
+                                break;
+                            }
+                            ball = next;
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let score = if won {
+            600u32.saturating_sub(shots * 25)
+        } else {
+            25
+        };
+        record_score(state, name, score);
+        let result = if won {
+            format!("Holed out in {shots}. Score: {score}")
+        } else {
+            format!("Out of strokes. Score: {score}")
+        };
+        if !wait_menu(state, name, &[result], true) {
+            return;
+        }
+    }
+}
+
+fn make_golf_course(state: &mut AppState, w: i32, h: i32) -> HashSet<(i32, i32)> {
+    let mut walls = HashSet::new();
+    for x in [w / 4, w / 2, w * 3 / 4] {
+        let gap = state.rng.range(3, h - 4);
+        for y in 2..h - 1 {
+            if (y - gap).abs() > 1 {
+                walls.insert((x, y));
+            }
+        }
+    }
+    walls
+}
+
+fn draw_mini_golf(
+    state: &AppState,
+    name: &str,
+    w: i32,
+    h: i32,
+    ball: (i32, i32),
+    hole: (i32, i32),
+    walls: &HashSet<(i32, i32)>,
+    aim: (i32, i32),
+    shots: u32,
+    max_shots: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - h as usize / 2 + 1;
+    let left = cols / 2 - w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Shots {shots}/{max_shots}   Aim WASD/arrows   Space putts"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        h as usize + 2,
+        w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in walls {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "#",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    put(
+        &mut buf,
+        top + hole.1 as usize,
+        left + hole.0 as usize,
+        "O",
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + ball.1 as usize,
+        left + ball.0 as usize,
+        "o",
+        &theme,
+        Role::Highlight,
+        true,
+    );
+    let arrow = match aim {
+        (0, -1) => "^",
+        (0, 1) => "v",
+        (-1, 0) => "<",
+        _ => ">",
+    };
+    put(
+        &mut buf,
+        top + ball.1.saturating_sub(1) as usize,
+        left + ball.0 as usize,
+        arrow,
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_darts(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 58, name) {
+        return;
+    }
+    loop {
+        let mut cursor = (0i32, 0i32);
+        let mut wind = (state.rng.range(-1, 1), state.rng.range(-1, 1));
+        let mut throws = 0u32;
+        let max_throws = 9u32;
+        let mut score = 0u32;
+        while throws < max_throws {
+            draw_darts(state, name, cursor, wind, throws, max_throws, score);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') => cursor.1 = (cursor.1 - 1).max(-5),
+                    Key::Down | Key::Char('s') => cursor.1 = (cursor.1 + 1).min(5),
+                    Key::Left | Key::Char('a') => cursor.0 = (cursor.0 - 1).max(-10),
+                    Key::Right | Key::Char('d') => cursor.0 = (cursor.0 + 1).min(10),
+                    Key::Enter | Key::Space => {
+                        let hit = (
+                            (cursor.0 + wind.0).clamp(-10, 10),
+                            (cursor.1 + wind.1).clamp(-5, 5),
+                        );
+                        let dist = hit.0 * hit.0 + hit.1 * hit.1 * 4;
+                        let points = if dist <= 1 {
+                            50
+                        } else if dist <= 9 {
+                            25
+                        } else if dist <= 36 {
+                            10
+                        } else if dist <= 81 {
+                            5
+                        } else {
+                            0
+                        };
+                        score += points;
+                        throws += 1;
+                        wind = (state.rng.range(-1, 1), state.rng.range(-1, 1));
+                        if points > 0 {
+                            play_sound(state, "score");
+                        } else {
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[format!("Final score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn draw_darts(
+    state: &AppState,
+    name: &str,
+    cursor: (i32, i32),
+    wind: (i32, i32),
+    throws: u32,
+    max_throws: u32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 7;
+    let left = cols / 2 - 12;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!(
+            "Score {score}   Throw {throws}/{max_throws}   Wind {},{}",
+            wind.0, wind.1
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for y in -5i32..=5 {
+        for x in -10i32..=10 {
+            let dist = x * x + y * y * 4;
+            let ch = if (x, y) == cursor {
+                "+"
+            } else if dist <= 1 {
+                "O"
+            } else if dist <= 9 {
+                "o"
+            } else if dist <= 36 {
+                "."
+            } else if dist <= 81 {
+                "`"
+            } else {
+                " "
+            };
+            let role = if (x, y) == cursor {
+                Role::Highlight
+            } else if dist <= 9 {
+                Role::Success
+            } else if dist <= 81 {
+                Role::Muted
+            } else {
+                Role::Normal
+            };
+            put(
+                &mut buf,
+                (top as i32 + y + 5) as usize,
+                (left as i32 + x + 10) as usize,
+                ch,
+                &theme,
+                role,
+                dist <= 9 || (x, y) == cursor,
+            );
+        }
+    }
+    center(
+        &mut buf,
+        top + 13,
+        "Move reticle, Space throws. Wind nudges the dart after release.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_mancala(state: &mut AppState, name: &str) {
+    if !require_size(state, 18, 60, name) {
+        return;
+    }
+    loop {
+        let stones = match state.difficulty_index {
+            0 => 3,
+            1 => 4,
+            _ => 5,
+        };
+        let mut player = [stones; 6];
+        let mut cpu = [stones; 6];
+        let mut player_store = 0u8;
+        let mut cpu_store = 0u8;
+        let mut cursor = 2usize;
+        let mut message = "Choose one of your pits and sow.".to_string();
+
+        while !mancala_empty(&player) && !mancala_empty(&cpu) {
+            draw_mancala(
+                state,
+                name,
+                &player,
+                &cpu,
+                player_store,
+                cpu_store,
+                cursor,
+                &message,
+            );
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Left | Key::Char('a') if cursor > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor < 5 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        if player[cursor] == 0 {
+                            message = "That pit is empty.".to_string();
+                            play_sound(state, "wall");
+                            continue;
+                        }
+                        let extra =
+                            mancala_sow_player(&mut player, &mut cpu, &mut player_store, cursor);
+                        play_sound(state, "score");
+                        if extra {
+                            message = "Last stone landed in your store. Go again.".to_string();
+                            continue;
+                        }
+                        while !mancala_empty(&cpu) {
+                            let cpu_choice = mancala_cpu_choice(&cpu);
+                            let cpu_extra =
+                                mancala_sow_cpu(&mut player, &mut cpu, &mut cpu_store, cpu_choice);
+                            if !cpu_extra {
+                                break;
+                            }
+                        }
+                        message = "Your move.".to_string();
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+
+        player_store += player.iter().sum::<u8>();
+        cpu_store += cpu.iter().sum::<u8>();
+        let score = if player_store >= cpu_store {
+            500 + player_store as u32 * 20
+        } else {
+            player_store as u32 * 20
+        };
+        record_score(state, name, score);
+        let result = if player_store > cpu_store {
+            format!("You won {player_store}-{cpu_store}. Score: {score}")
+        } else if player_store == cpu_store {
+            format!("Tie game {player_store}-{cpu_store}. Score: {score}")
+        } else {
+            format!("CPU won {cpu_store}-{player_store}. Score: {score}")
+        };
+        if !wait_menu(state, name, &[result], true) {
+            return;
+        }
+    }
+}
+
+fn mancala_empty(side: &[u8; 6]) -> bool {
+    side.iter().all(|&stones| stones == 0)
+}
+
+fn mancala_cpu_choice(cpu: &[u8; 6]) -> usize {
+    let mut choice = 0usize;
+    let mut best = 0u8;
+    for (index, &stones) in cpu.iter().enumerate() {
+        if stones > best {
+            best = stones;
+            choice = index;
+        }
+    }
+    choice
+}
+
+fn mancala_sow_player(player: &mut [u8; 6], cpu: &mut [u8; 6], store: &mut u8, pit: usize) -> bool {
+    let mut stones = player[pit];
+    player[pit] = 0;
+    let mut pos = pit;
+    while stones > 0 {
+        pos = (pos + 1) % 13;
+        match pos {
+            0..=5 => player[pos] += 1,
+            6 => *store += 1,
+            _ => cpu[12 - pos] += 1,
+        }
+        stones -= 1;
+    }
+    if pos < 6 && player[pos] == 1 {
+        let opposite = 5 - pos;
+        if cpu[opposite] > 0 {
+            *store += cpu[opposite] + 1;
+            cpu[opposite] = 0;
+            player[pos] = 0;
+        }
+    }
+    pos == 6
+}
+
+fn mancala_sow_cpu(player: &mut [u8; 6], cpu: &mut [u8; 6], store: &mut u8, pit: usize) -> bool {
+    let mut stones = cpu[pit];
+    cpu[pit] = 0;
+    let mut pos = pit;
+    while stones > 0 {
+        pos = (pos + 1) % 13;
+        match pos {
+            0..=5 => cpu[pos] += 1,
+            6 => *store += 1,
+            _ => player[12 - pos] += 1,
+        }
+        stones -= 1;
+    }
+    if pos < 6 && cpu[pos] == 1 {
+        let opposite = 5 - pos;
+        if player[opposite] > 0 {
+            *store += player[opposite] + 1;
+            player[opposite] = 0;
+            cpu[pos] = 0;
+        }
+    }
+    pos == 6
+}
+
+fn draw_mancala(
+    state: &AppState,
+    name: &str,
+    player: &[u8; 6],
+    cpu: &[u8; 6],
+    player_store: u8,
+    cpu_store: u8,
+    cursor: usize,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        "A/D choose pit   Space sows   Captures use the opposite pit",
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    let top = rows / 2 - 4;
+    let left = cols / 2 - 23;
+    put(
+        &mut buf,
+        top,
+        left,
+        &format!("CPU store {:02}", cpu_store),
+        &theme,
+        Role::Danger,
+        true,
+    );
+    put(
+        &mut buf,
+        top,
+        left + 33,
+        &format!("Your store {:02}", player_store),
+        &theme,
+        Role::Success,
+        true,
+    );
+    for i in 0..6 {
+        let x = left + 10 + i * 5;
+        put(
+            &mut buf,
+            top + 2,
+            x,
+            &format!("[{}]", cpu[5 - i]),
+            &theme,
+            Role::Danger,
+            true,
+        );
+        let text = format!("[{}]", player[i]);
+        if i == cursor {
+            put_inv(&mut buf, top + 5, x, &text, &theme, Role::Highlight);
+        } else {
+            put(&mut buf, top + 5, x, &text, &theme, Role::Success, true);
+        }
+    }
+    center(
+        &mut buf,
+        top + 8,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_mini_sudoku(state: &mut AppState, name: &str) {
+    if !require_size(state, 18, 50, name) {
+        return;
+    }
+    loop {
+        let solution = mini_sudoku_solution(state.rng.usize(4) as u8);
+        let mut board = solution;
+        let mut fixed = [true; 16];
+        let blanks = match state.difficulty_index {
+            0 => 6,
+            1 => 8,
+            _ => 10,
+        };
+        let mut removed = 0;
+        while removed < blanks {
+            let index = state.rng.usize(16);
+            if fixed[index] {
+                fixed[index] = false;
+                board[index] = 0;
+                removed += 1;
+            }
+        }
+        let mut cursor = 0usize;
+        let mut moves_count = 0u32;
+        let mut message = "Fill blanks with 1-4.".to_string();
+        loop {
+            let won = board == solution;
+            draw_mini_sudoku(state, name, &board, &solution, &fixed, cursor, &message);
+            if won {
+                let score = 800u32.saturating_sub(moves_count * 12);
+                record_score(state, name, score);
+                if !wait_menu(
+                    state,
+                    name,
+                    &[
+                        format!("Solved. Score: {score}"),
+                        format!("Moves: {moves_count}"),
+                    ],
+                    true,
+                ) {
+                    return;
+                }
+                break;
+            }
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 4 => cursor -= 4,
+                    Key::Down | Key::Char('s') if cursor < 12 => cursor += 4,
+                    Key::Left | Key::Char('a') if cursor % 4 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 4 < 3 => cursor += 1,
+                    Key::Char(ch @ '1'..='4') if !fixed[cursor] => {
+                        board[cursor] = ch as u8 - b'0';
+                        moves_count += 1;
+                        if board[cursor] == solution[cursor] {
+                            message = "Correct.".to_string();
+                            play_sound(state, "score");
+                        } else {
+                            message = "That breaks the puzzle.".to_string();
+                            play_sound(state, "wall");
+                        }
+                    }
+                    Key::Backspace | Key::Char('0') if !fixed[cursor] => {
+                        board[cursor] = 0;
+                        message = "Cell cleared.".to_string();
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn mini_sudoku_solution(shift: u8) -> [u8; 16] {
+    let base = [1, 2, 3, 4, 3, 4, 1, 2, 2, 1, 4, 3, 4, 3, 2, 1];
+    let mut solution = [0u8; 16];
+    for (index, value) in base.iter().enumerate() {
+        solution[index] = ((*value + shift - 1) % 4) + 1;
+    }
+    solution
+}
+
+fn draw_mini_sudoku(
+    state: &AppState,
+    name: &str,
+    board: &[u8; 16],
+    solution: &[u8; 16],
+    fixed: &[bool; 16],
+    cursor: usize,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 5;
+    let left = cols / 2 - 10;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        "Move cursor, press 1-4, Backspace clears editable cells.",
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for y in 0..4 {
+        for x in 0..4 {
+            let index = y * 4 + x;
+            let value = board[index];
+            let text = if value == 0 {
+                " . ".to_string()
+            } else {
+                format!(" {value} ")
+            };
+            let role = if fixed[index] {
+                Role::Muted
+            } else if value != 0 && value != solution[index] {
+                Role::Danger
+            } else {
+                Role::Success
+            };
+            if index == cursor {
+                put_inv(&mut buf, top + y * 2, left + x * 5, &text, &theme, role);
+            } else {
+                put(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 5,
+                    &text,
+                    &theme,
+                    role,
+                    true,
+                );
+            }
+        }
+    }
+    center(
+        &mut buf,
+        top + 10,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_reversi(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 60, name) {
+        return;
+    }
+    loop {
+        let mut board = [' '; 36];
+        board[2 * 6 + 2] = 'O';
+        board[3 * 6 + 3] = 'O';
+        board[2 * 6 + 3] = 'X';
+        board[3 * 6 + 2] = 'X';
+        let mut cursor = 2 * 6 + 1;
+        let mut message = "You are X. Flip CPU lines.".to_string();
+
+        while reversi_has_move(&board, 'X', 'O') || reversi_has_move(&board, 'O', 'X') {
+            if !reversi_has_move(&board, 'X', 'O') {
+                reversi_cpu_move(&mut board);
+                message = "No legal player move, CPU played.".to_string();
+                continue;
+            }
+            draw_reversi(state, name, &board, cursor, &message);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 6 => cursor -= 6,
+                    Key::Down | Key::Char('s') if cursor < 30 => cursor += 6,
+                    Key::Left | Key::Char('a') if cursor % 6 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 6 < 5 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        let flips = reversi_flips(&board, cursor % 6, cursor / 6, 'X', 'O');
+                        if flips.is_empty() {
+                            message = "Legal moves must trap CPU discs in a line.".to_string();
+                            play_sound(state, "wall");
+                        } else {
+                            board[cursor] = 'X';
+                            for index in flips {
+                                board[index] = 'X';
+                            }
+                            play_sound(state, "score");
+                            if reversi_has_move(&board, 'O', 'X') {
+                                reversi_cpu_move(&mut board);
+                            }
+                            message = "Your move.".to_string();
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+
+        draw_reversi(state, name, &board, cursor, "Board complete.");
+        let player_count = board.iter().filter(|&&cell| cell == 'X').count() as u32;
+        let cpu_count = board.iter().filter(|&&cell| cell == 'O').count() as u32;
+        let score = if player_count >= cpu_count {
+            500 + player_count * 20
+        } else {
+            player_count * 20
+        };
+        record_score(state, name, score);
+        let result = if player_count > cpu_count {
+            format!("You won {player_count}-{cpu_count}. Score: {score}")
+        } else if player_count == cpu_count {
+            format!("Draw {player_count}-{cpu_count}. Score: {score}")
+        } else {
+            format!("CPU won {cpu_count}-{player_count}. Score: {score}")
+        };
+        if !wait_menu(state, name, &[result], true) {
+            return;
+        }
+    }
+}
+
+fn reversi_has_move(board: &[char; 36], me: char, other: char) -> bool {
+    (0..36).any(|index| !reversi_flips(board, index % 6, index / 6, me, other).is_empty())
+}
+
+fn reversi_cpu_move(board: &mut [char; 36]) {
+    let mut best_index = None;
+    let mut best_flips = Vec::new();
+    for index in 0..36 {
+        let flips = reversi_flips(board, index % 6, index / 6, 'O', 'X');
+        if flips.len() > best_flips.len() {
+            best_index = Some(index);
+            best_flips = flips;
+        }
+    }
+    if let Some(index) = best_index {
+        board[index] = 'O';
+        for flip in best_flips {
+            board[flip] = 'O';
+        }
+    }
+}
+
+fn reversi_flips(board: &[char; 36], x: usize, y: usize, me: char, other: char) -> Vec<usize> {
+    if board[y * 6 + x] != ' ' {
+        return Vec::new();
+    }
+    let mut flips = Vec::new();
+    for (dx, dy) in [
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (-1, 0),
+        (1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
+    ] {
+        let mut path = Vec::new();
+        let mut nx = x as i32 + dx;
+        let mut ny = y as i32 + dy;
+        while (0..6).contains(&nx) && (0..6).contains(&ny) {
+            let index = ny as usize * 6 + nx as usize;
+            if board[index] == other {
+                path.push(index);
+            } else if board[index] == me {
+                if !path.is_empty() {
+                    flips.extend(path);
+                }
+                break;
+            } else {
+                break;
+            }
+            nx += dx;
+            ny += dy;
+        }
+    }
+    flips
+}
+
+fn draw_reversi(state: &AppState, name: &str, board: &[char; 36], cursor: usize, message: &str) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 7;
+    let left = cols / 2 - 14;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    let player_count = board.iter().filter(|&&cell| cell == 'X').count();
+    let cpu_count = board.iter().filter(|&&cell| cell == 'O').count();
+    center(
+        &mut buf,
+        3,
+        &format!("X {player_count}   O {cpu_count}   Space places a disc"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for y in 0..6 {
+        for x in 0..6 {
+            let index = y * 6 + x;
+            let cell = board[index];
+            let text = match cell {
+                'X' => "[X]",
+                'O' => "[O]",
+                _ => "[ ]",
+            };
+            let role = match cell {
+                'X' => Role::Success,
+                'O' => Role::Danger,
+                _ => Role::Muted,
+            };
+            if index == cursor {
+                put_inv(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 5,
+                    text,
+                    &theme,
+                    Role::Highlight,
+                );
+            } else {
+                put(
+                    &mut buf,
+                    top + y * 2,
+                    left + x * 5,
+                    text,
+                    &theme,
+                    role,
+                    true,
+                );
+            }
+        }
+    }
+    center(
+        &mut buf,
+        top + 14,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_bowling(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    loop {
+        let mut frame = 1u32;
+        let mut total = 0u32;
+        let mut aim = 3i32;
+        let mut power = 7i32;
+        let mut message = "A/D aim lane, W/S power, Space rolls.".to_string();
+
+        while frame <= 10 {
+            let mut pins_left = 10i32;
+            let mut roll = 1u32;
+            while roll <= 2 && pins_left > 0 {
+                draw_bowling(
+                    state, name, frame, roll, aim, power, pins_left, total, &message,
+                );
+                if let Some(key) = wait_for_key() {
+                    match key {
+                        Key::Left | Key::Char('a') => aim = (aim - 1).max(0),
+                        Key::Right | Key::Char('d') => aim = (aim + 1).min(6),
+                        Key::Up | Key::Char('w') => power = (power + 1).min(10),
+                        Key::Down | Key::Char('s') => power = (power - 1).max(1),
+                        Key::Enter | Key::Space => {
+                            let knocked = bowling_roll(state, aim, power, pins_left);
+                            pins_left -= knocked;
+                            total += knocked as u32;
+                            if knocked == 10 {
+                                total += 10;
+                                message = "Strike bonus.".to_string();
+                                play_sound(state, "score");
+                                break;
+                            }
+                            if pins_left == 0 {
+                                total += 5;
+                                message = "Spare bonus.".to_string();
+                                play_sound(state, "score");
+                                break;
+                            }
+                            message = format!("{knocked} pins down, {pins_left} standing.");
+                            play_sound(state, "wall");
+                            roll += 1;
+                        }
+                        _ if is_pause(key) => {
+                            if pause_screen(state).is_none() {
+                                return;
+                            }
+                        }
+                        _ if is_quit(key) => return,
+                        _ => {}
+                    }
+                }
+            }
+            frame += 1;
+        }
+        let score = total * 8;
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Pins and bonuses: {total}"),
+                format!("Score: {score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn bowling_roll(state: &mut AppState, aim: i32, power: i32, pins_left: i32) -> i32 {
+    let drift = state.rng.range(-1, 1);
+    let lane_error = (aim + drift - 3).abs();
+    let power_error = (power - 7).abs();
+    let base = 10 - lane_error * 3 - power_error;
+    base.clamp(0, pins_left)
+}
+
+fn draw_bowling(
+    state: &AppState,
+    name: &str,
+    frame: u32,
+    roll: u32,
+    aim: i32,
+    power: i32,
+    pins_left: i32,
+    total: u32,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 7;
+    let left = cols / 2 - 16;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Frame {frame}/10 Roll {roll}   Total {total}   Power {power}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for y in 0..10 {
+        put(&mut buf, top + y, left, "|", &theme, Role::Muted, false);
+        put(
+            &mut buf,
+            top + y,
+            left + 31,
+            "|",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    for pin in 0..pins_left {
+        let x = left + 12 + (pin as usize % 5) * 2 + (pin as usize / 5);
+        let y = top + pin as usize / 5;
+        put(&mut buf, y, x, "^", &theme, Role::Danger, true);
+    }
+    for lane in 0..7 {
+        let x = left + 4 + lane * 4;
+        let role = if lane as i32 == aim {
+            Role::Highlight
+        } else {
+            Role::Muted
+        };
+        put(&mut buf, top + 9, x, "o", &theme, role, lane as i32 == aim);
+    }
+    center(
+        &mut buf,
+        top + 12,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_skee_ball(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 60, name) {
+        return;
+    }
+    loop {
+        let mut lane = 2i32;
+        let mut power = 6i32;
+        let mut balls = 0u32;
+        let mut score = 0u32;
+        let max_balls = 9u32;
+        let mut message = "A/D lane, W/S power, Space rolls.".to_string();
+        while balls < max_balls {
+            draw_skee_ball(state, name, lane, power, balls, max_balls, score, &message);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Left | Key::Char('a') => lane = (lane - 1).max(0),
+                    Key::Right | Key::Char('d') => lane = (lane + 1).min(4),
+                    Key::Up | Key::Char('w') => power = (power + 1).min(10),
+                    Key::Down | Key::Char('s') => power = (power - 1).max(1),
+                    Key::Enter | Key::Space => {
+                        let drift = state.rng.range(-1, 1);
+                        let final_lane = (lane + drift).clamp(0, 4);
+                        let lane_error = (final_lane - 2).abs();
+                        let power_error = (power - 7).abs();
+                        let points = match lane_error + power_error {
+                            0 => 100,
+                            1 => 50,
+                            2 => 30,
+                            3 => 20,
+                            _ => 10,
+                        };
+                        score += points;
+                        balls += 1;
+                        message = format!("Ball scored {points}. Drift was {drift}.");
+                        if points >= 50 {
+                            play_sound(state, "score");
+                        } else {
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[format!("Final score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn draw_skee_ball(
+    state: &AppState,
+    name: &str,
+    lane: i32,
+    power: i32,
+    balls: u32,
+    max_balls: u32,
+    score: u32,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 7;
+    let left = cols / 2 - 15;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Score {score}   Ball {balls}/{max_balls}   Power {power}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for (row, label) in [" [100] ", "  [50] ", "  [30] ", "  [20] ", "  [10] "]
+        .iter()
+        .enumerate()
+    {
+        center(
+            &mut buf,
+            top + row * 2,
+            label,
+            &theme,
+            if row == 0 {
+                Role::Success
+            } else {
+                Role::Secondary
+            },
+            true,
+            cols,
+        );
+    }
+    for x in 0..5 {
+        let text = if x == lane { " ^ " } else { " . " };
+        let role = if x == lane {
+            Role::Highlight
+        } else {
+            Role::Muted
+        };
+        put(
+            &mut buf,
+            top + 12,
+            left + x as usize * 7,
+            text,
+            &theme,
+            role,
+            true,
+        );
+    }
+    center(
+        &mut buf,
+        top + 15,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_keeper(state: &mut AppState, name: &str) {
+    if !require_size(state, 22, 54, name) {
+        return;
+    }
+    loop {
+        let lanes = 7i32;
+        let goal_y = 12i32;
+        let target_saves = match state.difficulty_index {
+            0 => 12,
+            1 => 16,
+            _ => 20,
+        };
+        let mut keeper = 3i32;
+        let mut shot_lane = state.rng.range(0, lanes - 1);
+        let mut shot_y = 0i32;
+        let mut saves = 0u32;
+        let mut misses = 0u32;
+        let mut message = "A/D move keeper. Block the shot lane.".to_string();
+
+        while misses < 5 && saves < target_saves {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => keeper = (keeper - 1).max(0),
+                    Key::Right | Key::Char('d') => keeper = (keeper + 1).min(lanes - 1),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            draw_keeper(
+                state,
+                name,
+                lanes,
+                goal_y,
+                keeper,
+                shot_lane,
+                shot_y,
+                saves,
+                misses,
+                target_saves,
+                &message,
+            );
+            shot_y += 1;
+            if shot_y >= goal_y {
+                if shot_lane == keeper {
+                    saves += 1;
+                    message = "Save.".to_string();
+                    play_sound(state, "score");
+                } else {
+                    misses += 1;
+                    message = "Goal conceded.".to_string();
+                    play_sound(state, "alert");
+                }
+                shot_lane = state.rng.range(0, lanes - 1);
+                shot_y = 0;
+            }
+            let tick = (state.difficulty().tick_ms as f64 * 1.25) as u64;
+            sleep_frame(frame, tick.max(35));
+        }
+
+        let score = saves * 60 + if saves >= target_saves { 400 } else { 0 };
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Saves: {saves}   Misses: {misses}"),
+                format!("Score: {score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_keeper(
+    state: &AppState,
+    name: &str,
+    lanes: i32,
+    goal_y: i32,
+    keeper: i32,
+    shot_lane: i32,
+    shot_y: i32,
+    saves: u32,
+    misses: u32,
+    target_saves: u32,
+    message: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 7;
+    let left = cols / 2 - 16;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        1,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        3,
+        &format!("Saves {saves}/{target_saves}   Misses {misses}/5"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for lane in 0..lanes {
+        let x = left + lane as usize * 5;
+        put(&mut buf, top, x, "|", &theme, Role::Muted, false);
+        put(
+            &mut buf,
+            top + goal_y as usize,
+            x,
+            if lane == keeper { "[K]" } else { "___" },
+            &theme,
+            if lane == keeper {
+                Role::Highlight
+            } else {
+                Role::Muted
+            },
+            lane == keeper,
+        );
+    }
+    put(
+        &mut buf,
+        top + shot_y as usize,
+        left + shot_lane as usize * 5,
+        " o ",
+        &theme,
+        Role::Danger,
+        true,
+    );
+    center(
+        &mut buf,
+        top + goal_y as usize + 3,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    loop {
+        let (w, h) = full_board(44, 15, 96, 32);
+        let start = (1, h - 2);
+        let goal = (w - 2, 1);
+        let maze_kind = !matches!(
+            kind,
+            QuestKind::Quantum | QuestKind::Go | QuestKind::Mars | QuestKind::DeepSea
+        );
+        let walls = if maze_kind {
+            make_maze(state, w, h, start, goal)
+        } else {
+            HashSet::new()
+        };
+        let item_count = match kind {
+            QuestKind::Go => 9,
+            QuestKind::Pirate | QuestKind::Jungle | QuestKind::Dragon => 5,
+            QuestKind::Volcano => 4,
+            _ => 0,
+        };
+        let mut blocked = HashSet::from([start, goal]);
+        let mut items = HashSet::new();
+        for _ in 0..item_count {
+            let point = quest_open_point(state, w, h, start, &walls, &blocked);
+            blocked.insert(point);
+            items.insert(point);
+        }
+        let hazard_count = match kind {
+            QuestKind::Quantum | QuestKind::Mars | QuestKind::DeepSea => {
+                18 + state.difficulty_index * 7
+            }
+            QuestKind::Dragon => 8,
+            QuestKind::Jungle => 12,
+            _ => 0,
+        };
+        let mut hazards = HashSet::new();
+        for _ in 0..hazard_count {
+            let point = quest_open_point(state, w, h, start, &walls, &blocked);
+            blocked.insert(point);
+            hazards.insert(point);
+        }
+        let ordered_count = match kind {
+            QuestKind::Cipher | QuestKind::Samurai => 5,
+            _ => 0,
+        };
+        let mut nodes = Vec::new();
+        for n in 1..=ordered_count {
+            let point = quest_open_point(state, w, h, start, &walls, &blocked);
+            blocked.insert(point);
+            nodes.push((point.0, point.1, n as i32));
+        }
+
+        let mut player = start;
+        let mut steps = 0u32;
+        let mut next_node = 1i32;
+        let mut resource = 100i32;
+        let mut lava_y = h - 1;
+        let mut score_bonus = 0u32;
+        let mut status = quest_help(kind).to_string();
+        let mut won = false;
+        let mut lost = false;
+
+        while !won && !lost {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                if is_pause(key) {
+                    if pause_screen(state).is_none() {
+                        return;
+                    }
+                    continue;
+                }
+                if is_quit(key) {
+                    return;
+                }
+                let mut delta = match key {
+                    Key::Up | Key::Char('w') => (0, -1),
+                    Key::Down | Key::Char('s') => (0, 1),
+                    Key::Left | Key::Char('a') => (-1, 0),
+                    Key::Right | Key::Char('d') => (1, 0),
+                    _ => (0, 0),
+                };
+                if matches!(kind, QuestKind::Mirror) {
+                    delta.0 = -delta.0;
+                }
+                if matches!(kind, QuestKind::Checkmate) {
+                    delta = match key {
+                        Key::Up | Key::Char('w') => (1, -2),
+                        Key::Down | Key::Char('s') => (-1, 2),
+                        Key::Left | Key::Char('a') => (-2, -1),
+                        Key::Right | Key::Char('d') => (2, 1),
+                        _ => (0, 0),
+                    };
+                }
+                if delta == (0, 0) {
+                    continue;
+                }
+                let moved = if matches!(kind, QuestKind::Marble | QuestKind::Mirror) {
+                    let mut any = false;
+                    loop {
+                        let next = (player.0 + delta.0, player.1 + delta.1);
+                        if !quest_can_enter(next, w, h, &walls) {
+                            break;
+                        }
+                        player = next;
+                        steps += 1;
+                        any = true;
+                        if items.remove(&player) {
+                            score_bonus += 40;
+                            play_sound(state, "score");
+                        }
+                    }
+                    any
+                } else {
+                    let next = (player.0 + delta.0, player.1 + delta.1);
+                    if quest_can_enter(next, w, h, &walls) {
+                        player = next;
+                        steps += 1;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if moved {
+                    play_sound(state, "wall");
+                }
+            }
+
+            if items.remove(&player) {
+                score_bonus += match kind {
+                    QuestKind::Go => 30,
+                    QuestKind::Pirate | QuestKind::Dragon => 55,
+                    _ => 40,
+                };
+                play_sound(state, "score");
+            }
+            if let Some(pos) = nodes
+                .iter()
+                .position(|&(x, y, n)| (x, y) == player && n == next_node)
+            {
+                nodes.remove(pos);
+                next_node += 1;
+                score_bonus += 50;
+                play_sound(state, "score");
+            }
+
+            if matches!(kind, QuestKind::Volcano) && steps > 0 && steps % 12 == 0 {
+                lava_y = (lava_y - 1).max(2);
+            }
+            if matches!(kind, QuestKind::DeepSea) && steps > 0 {
+                resource -= 1 + state.difficulty_index as i32;
+            }
+            if matches!(kind, QuestKind::Mars | QuestKind::Quantum) && hazards.contains(&player) {
+                lost = true;
+                status = "Scanner missed a hidden hazard.".to_string();
+                play_sound(state, "alert");
+            }
+            if matches!(kind, QuestKind::Dragon | QuestKind::Jungle) && hazards.contains(&player) {
+                lost = true;
+                status = "Caught by the lair traps.".to_string();
+                play_sound(state, "alert");
+            }
+            if matches!(kind, QuestKind::Volcano) && player.1 >= lava_y {
+                lost = true;
+                status = "The lava reached you.".to_string();
+                play_sound(state, "alert");
+            }
+            if matches!(kind, QuestKind::DeepSea) && resource <= 0 {
+                lost = true;
+                status = "Pressure crushed the run.".to_string();
+                play_sound(state, "alert");
+            }
+
+            let nearby = hazards
+                .iter()
+                .filter(|&&(x, y)| (x - player.0).abs() <= 1 && (y - player.1).abs() <= 1)
+                .count();
+            if !lost {
+                status = match kind {
+                    QuestKind::Checkmate => {
+                        "Knight-style moves only. Land on the king.".to_string()
+                    }
+                    QuestKind::Cipher | QuestKind::Samurai => {
+                        format!("Trace node {next_node}, then reach the exit.")
+                    }
+                    QuestKind::Marble => "Slide until blocked; plan each roll.".to_string(),
+                    QuestKind::Mirror => {
+                        "Left and right are mirrored; sliding movement is active.".to_string()
+                    }
+                    QuestKind::Quantum | QuestKind::Mars => {
+                        format!("Scanner ping: {nearby} hidden hazard(s).")
+                    }
+                    QuestKind::DeepSea => format!("Pressure {resource}. Sonar ping: {nearby}."),
+                    QuestKind::Volcano => {
+                        format!("Relics left: {}. Lava row: {lava_y}.", items.len())
+                    }
+                    QuestKind::Go => {
+                        format!("Territory left: {}. Exit after claiming it.", items.len())
+                    }
+                    QuestKind::Pirate => format!("Treasure left: {}.", items.len()),
+                    QuestKind::Jungle => {
+                        format!(
+                            "Relics left: {}. Visible traps block greedy routes.",
+                            items.len()
+                        )
+                    }
+                    QuestKind::Dragon => {
+                        format!("Gold left: {}. Avoid the hot lair marks.", items.len())
+                    }
+                };
+            }
+
+            let needs_items = matches!(
+                kind,
+                QuestKind::Go
+                    | QuestKind::Pirate
+                    | QuestKind::Jungle
+                    | QuestKind::Dragon
+                    | QuestKind::Volcano
+            );
+            let needs_nodes = ordered_count > 0;
+            if player == goal
+                && (!needs_items || items.is_empty())
+                && (!needs_nodes || next_node > ordered_count as i32)
+            {
+                won = true;
+                play_sound(state, "score");
+            }
+
+            draw_micro_quest(
+                state, name, kind, w, h, player, goal, &walls, &items, &hazards, &nodes, lava_y,
+                steps, &status,
+            );
+            sleep_frame(frame, 55);
+        }
+
+        let score = if won {
+            900u32.saturating_sub(steps * 4) + score_bonus
+        } else {
+            score_bonus + steps
+        };
+        record_score(state, name, score);
+        let result = if won {
+            format!("Mission complete. Score: {score}")
+        } else {
+            format!("{status} Score: {score}")
+        };
+        if !wait_menu(state, name, &[result], true) {
+            return;
+        }
+    }
+}
+
+fn quest_help(kind: QuestKind) -> &'static str {
+    match kind {
+        QuestKind::Checkmate => "Use chessy knight leaps to reach the king.",
+        QuestKind::Cipher => "Trace cipher nodes in order.",
+        QuestKind::Marble => "Roll until blocked.",
+        QuestKind::Quantum => "Use scanner pings to dodge hidden hazards.",
+        QuestKind::Go => "Claim territory before exiting.",
+        QuestKind::Pirate => "Collect all treasure, then escape.",
+        QuestKind::Samurai => "Trace honor nodes in order.",
+        QuestKind::Mars => "Scan the red field and reach the uplink.",
+        QuestKind::DeepSea => "Watch pressure and sonar pings.",
+        QuestKind::Volcano => "Grab relics while lava rises.",
+        QuestKind::Jungle => "Collect relics and avoid traps.",
+        QuestKind::Dragon => "Steal gold without stepping into hot marks.",
+        QuestKind::Mirror => "Mirrored controls and slide movement.",
+    }
+}
+
+fn quest_open_point(
+    state: &mut AppState,
+    w: i32,
+    h: i32,
+    start: (i32, i32),
+    walls: &HashSet<(i32, i32)>,
+    blocked: &HashSet<(i32, i32)>,
+) -> (i32, i32) {
+    for _ in 0..500 {
+        let point = (state.rng.range(2, w - 3), state.rng.range(2, h - 3));
+        if !walls.contains(&point)
+            && !blocked.contains(&point)
+            && (walls.is_empty() || path_exists(w, h, start, point, walls))
+        {
+            return point;
+        }
+    }
+    start
+}
+
+fn quest_can_enter(point: (i32, i32), w: i32, h: i32, walls: &HashSet<(i32, i32)>) -> bool {
+    point.0 > 0 && point.0 < w - 1 && point.1 > 0 && point.1 < h - 1 && !walls.contains(&point)
+}
+
+fn draw_micro_quest(
+    state: &AppState,
+    name: &str,
+    kind: QuestKind,
+    w: i32,
+    h: i32,
+    player: (i32, i32),
+    goal: (i32, i32),
+    walls: &HashSet<(i32, i32)>,
+    items: &HashSet<(i32, i32)>,
+    hazards: &HashSet<(i32, i32)>,
+    nodes: &[(i32, i32, i32)],
+    lava_y: i32,
+    steps: u32,
+    status: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - h as usize / 2 + 1;
+    let left = cols / 2 - w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Steps {steps}   {status}   WASD move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        h as usize + 2,
+        w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in walls {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "#",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    for &(x, y) in items {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "$",
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    if !matches!(
+        kind,
+        QuestKind::Quantum | QuestKind::Mars | QuestKind::DeepSea
+    ) {
+        for &(x, y) in hazards {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + x as usize,
+                "^",
+                &theme,
+                Role::Danger,
+                true,
+            );
+        }
+    }
+    for &(x, y, n) in nodes {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            &n.to_string(),
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    if matches!(kind, QuestKind::Volcano) {
+        for x in 1..w - 1 {
+            put(
+                &mut buf,
+                top + lava_y as usize,
+                left + x as usize,
+                "~",
+                &theme,
+                Role::Danger,
+                true,
+            );
+        }
+    }
+    let goal_sprite = if matches!(kind, QuestKind::Checkmate) {
+        "K"
+    } else {
+        "E"
+    };
+    put(
+        &mut buf,
+        top + goal.1 as usize,
+        left + goal.0 as usize,
+        goal_sprite,
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize,
+        "@",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
+    if !require_size(state, 22, 58, name) {
+        return;
+    }
+    loop {
+        let lanes = 5usize;
+        let track_h = 14i32;
+        let mut player_lane = 2usize;
+        let mut objects: Vec<(usize, f64, bool)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut collected = 0u32;
+        let target = lane_target(kind);
+        let mut meter = 80i32;
+        let mut jump = 0i32;
+        let mut tick = 0u32;
+        let mut last_spawn = Instant::now();
+        while lives > 0 && collected < target {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') if player_lane > 0 => player_lane -= 1,
+                    Key::Right | Key::Char('d') if player_lane + 1 < lanes => player_lane += 1,
+                    Key::Up | Key::Char('w') if matches!(kind, LaneKind::Snowboard) => meter += 5,
+                    Key::Down | Key::Char('s') if matches!(kind, LaneKind::Snowboard) => meter -= 5,
+                    Key::Enter | Key::Space
+                        if matches!(
+                            kind,
+                            LaneKind::Rune | LaneKind::Bmx | LaneKind::Horse | LaneKind::Ninja
+                        ) =>
+                    {
+                        jump = 3;
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            tick += 1;
+            if jump > 0 {
+                jump -= 1;
+            }
+            if matches!(
+                kind,
+                LaneKind::Desert | LaneKind::Horse | LaneKind::Submarine
+            ) && tick % 8 == 0
+            {
+                meter -= 1 + state.difficulty_index as i32;
+                if meter <= 0 {
+                    lives -= 1;
+                    meter = 45;
+                    play_sound(state, "alert");
+                }
+            }
+            if matches!(kind, LaneKind::Snowboard) {
+                meter += if tick % 2 == 0 { -2 } else { 1 };
+                if !(20..=120).contains(&meter) {
+                    lives -= 1;
+                    meter = 80;
+                    play_sound(state, "alert");
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((460.0 / state.difficulty().speed) as u64)
+            {
+                let good = match kind {
+                    LaneKind::Ski => true,
+                    LaneKind::Snowboard => state.rng.chance(1, 2),
+                    _ => state.rng.chance(2, 5),
+                };
+                objects.push((state.rng.usize(lanes), 1.0, good));
+                if state.difficulty_index > 0 && state.rng.chance(1, 4) {
+                    objects.push((state.rng.usize(lanes), 1.0, false));
+                }
+                last_spawn = Instant::now();
+            }
+            for object in &mut objects {
+                object.1 += match kind {
+                    LaneKind::Time => 0.62,
+                    LaneKind::Ski | LaneKind::Bmx => 0.52,
+                    _ => 0.42,
+                } * state.difficulty().speed;
+            }
+            let mut kept = Vec::new();
+            for (lane, y, good) in objects.into_iter() {
+                let at_player = y.round() as i32 >= track_h - 2 && lane == player_lane;
+                if y.round() as i32 >= track_h {
+                    if matches!(kind, LaneKind::Ski) && good && lane != player_lane {
+                        lives -= 1;
+                        play_sound(state, "alert");
+                    }
+                    continue;
+                }
+                if at_player {
+                    if good {
+                        collected += 1;
+                        score += lane_value(kind);
+                        if matches!(
+                            kind,
+                            LaneKind::Desert | LaneKind::Horse | LaneKind::Submarine
+                        ) {
+                            meter = (meter + 18).min(120);
+                        }
+                        play_sound(state, "score");
+                    } else if jump > 0 {
+                        score += 8;
+                    } else {
+                        lives -= 1;
+                        play_sound(state, "alert");
+                    }
+                } else {
+                    kept.push((lane, y, good));
+                }
+            }
+            objects = kept;
+            draw_micro_lane(
+                state,
+                name,
+                kind,
+                lanes,
+                track_h,
+                player_lane,
+                &objects,
+                lives,
+                score,
+                collected,
+                target,
+                meter,
+                jump,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        let final_score = score + if collected >= target { 350 } else { 0 };
+        record_score(state, name, final_score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Run score: {final_score}"),
+                format!("Collected {collected}/{target}."),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn lane_target(kind: LaneKind) -> u32 {
+    match kind {
+        LaneKind::Ski | LaneKind::Snowboard | LaneKind::Bmx | LaneKind::Horse => 14,
+        LaneKind::Desert | LaneKind::Submarine => 12,
+        _ => 10,
+    }
+}
+
+fn lane_value(kind: LaneKind) -> u32 {
+    match kind {
+        LaneKind::Ski | LaneKind::Snowboard => 25,
+        LaneKind::AirHockey | LaneKind::Hockey => 22,
+        _ => 20,
+    }
+}
+
+fn lane_sprites(kind: LaneKind) -> (&'static str, &'static str, &'static str) {
+    match kind {
+        LaneKind::Rune => ("<R>", "+", "|"),
+        LaneKind::Sea => ("<S>", "F", "*"),
+        LaneKind::AirHockey => ("[H]", "+", "o"),
+        LaneKind::Hockey => ("/H\\", "o", "#"),
+        LaneKind::Ski => ("/S\\", "G", "^"),
+        LaneKind::Snowboard => ("/R\\", "*", "X"),
+        LaneKind::Bmx => ("/X\\", "+", "[]"),
+        LaneKind::Horse => ("/H\\", "U", "|"),
+        LaneKind::Ninja => ("<N>", "S", "#"),
+        LaneKind::Moon => ("/M\\", "o", "#"),
+        LaneKind::Saturn => ("[S]", "o", "*"),
+        LaneKind::Submarine => ("<U>", "O", "*"),
+        LaneKind::Desert => ("/C\\", "W", "~"),
+        LaneKind::Time => ("<T>", "*", "|"),
+    }
+}
+
+fn draw_micro_lane(
+    state: &AppState,
+    name: &str,
+    kind: LaneKind,
+    lanes: usize,
+    track_h: i32,
+    player_lane: usize,
+    objects: &[(usize, f64, bool)],
+    lives: i32,
+    score: u32,
+    collected: u32,
+    target: u32,
+    meter: i32,
+    jump: i32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - track_h as usize / 2 + 1;
+    let left = cols / 2 - 16;
+    let lane_gap = 8usize;
+    let (player, good, bad) = lane_sprites(kind);
+    let status = if matches!(kind, LaneKind::Snowboard) {
+        format!("Balance {meter}")
+    } else if matches!(
+        kind,
+        LaneKind::Desert | LaneKind::Horse | LaneKind::Submarine
+    ) {
+        format!("Reserve {meter}")
+    } else if jump > 0 {
+        "Jump".to_string()
+    } else {
+        "Lane".to_string()
+    };
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   Goal {collected}/{target}   {status}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for lane in 0..lanes {
+        let x = left + lane * lane_gap;
+        for y in 0..track_h {
+            put(
+                &mut buf,
+                top + y as usize,
+                x,
+                "|",
+                &theme,
+                Role::Muted,
+                false,
+            );
+        }
+    }
+    for &(lane, y, is_good) in objects {
+        let x = left + lane * lane_gap;
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            x.saturating_sub(1),
+            if is_good { good } else { bad },
+            &theme,
+            if is_good { Role::Success } else { Role::Danger },
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + track_h as usize - 1,
+        left + player_lane * lane_gap - 1,
+        player,
+        &theme,
+        if jump > 0 {
+            Role::Highlight
+        } else {
+            Role::Secondary
+        },
+        true,
+    );
+    center(
+        &mut buf,
+        top + track_h as usize + 2,
+        "A/D lanes. Space jumps in runner games. Snowboard uses W/S balance.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
+    if matches!(kind, CatchKind::Poker) {
+        return game_poker_draw(state, name);
+    }
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    loop {
+        let (w, h) = full_board(48, 16, 112, 34);
+        let mut player_x = w / 2;
+        let mut objects: Vec<(i32, f64, bool)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut caught = 0u32;
+        let mut recipe = 0usize;
+        let target = catch_target(kind);
+        let mut last_spawn = Instant::now();
+        while lives > 0 && caught < target {
+            let frame = Instant::now();
+            let mut action = false;
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => player_x = (player_x - 2).max(2),
+                    Key::Right | Key::Char('d') => player_x = (player_x + 2).min(w - 3),
+                    Key::Enter | Key::Space => action = true,
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((440.0 / state.difficulty().speed) as u64)
+            {
+                let good_rate = if matches!(kind, CatchKind::Tennis | CatchKind::Cricket) {
+                    1
+                } else {
+                    2
+                };
+                let good = state.rng.chance(good_rate, 3);
+                objects.push((state.rng.range(2, w - 3), 1.0, good));
+                last_spawn = Instant::now();
+            }
+            for object in &mut objects {
+                object.1 += catch_speed(kind) * state.difficulty().speed;
+            }
+            let mut kept = Vec::new();
+            for (x, y, good) in objects.into_iter() {
+                let oy = y.round() as i32;
+                let aligned = oy >= h - 2 && (x - player_x).abs() <= 2;
+                let needs_action = matches!(
+                    kind,
+                    CatchKind::Tennis | CatchKind::Cricket | CatchKind::Pinball
+                );
+                if oy >= h {
+                    if good && !matches!(kind, CatchKind::Pinball) {
+                        lives -= 1;
+                        play_sound(state, "alert");
+                    }
+                    continue;
+                }
+                if aligned && (!needs_action || action) {
+                    if good {
+                        caught += 1;
+                        let recipe_bonus = if matches!(kind, CatchKind::Potion) {
+                            recipe = (recipe + 1) % 3;
+                            10 + recipe as u32 * 5
+                        } else {
+                            0
+                        };
+                        score += catch_value(kind) + recipe_bonus;
+                        play_sound(state, "score");
+                    } else {
+                        lives -= 1;
+                        recipe = 0;
+                        play_sound(state, "alert");
+                    }
+                } else {
+                    kept.push((x, y, good));
+                }
+            }
+            objects = kept;
+            draw_micro_catch(
+                state, name, kind, w, h, player_x, &objects, lives, score, caught, target, recipe,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        let final_score = score + if caught >= target { 250 } else { 0 };
+        record_score(state, name, final_score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Final score: {final_score}"),
+                format!("Caught {caught}/{target}."),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn catch_target(kind: CatchKind) -> u32 {
+    match kind {
+        CatchKind::Pinball => 20,
+        CatchKind::Tennis | CatchKind::Cricket => 12,
+        _ => 14,
+    }
+}
+
+fn catch_speed(kind: CatchKind) -> f64 {
+    match kind {
+        CatchKind::Pinball => 0.62,
+        CatchKind::Tennis => 0.56,
+        _ => 0.42,
+    }
+}
+
+fn catch_value(kind: CatchKind) -> u32 {
+    match kind {
+        CatchKind::Pinball => 12,
+        CatchKind::Tennis | CatchKind::Cricket => 24,
+        CatchKind::Potion => 18,
+        _ => 16,
+    }
+}
+
+fn catch_sprites(kind: CatchKind) -> (&'static str, &'static str, &'static str) {
+    match kind {
+        CatchKind::Glyph => ("{V}", "*", "x"),
+        CatchKind::Pinball => ("[=]", "o", "v"),
+        CatchKind::Tennis => ("[T]", "o", "F"),
+        CatchKind::Cricket => ("[C]", "o", "b"),
+        CatchKind::Alien => ("{O}", "@", "x"),
+        CatchKind::Astro => ("[F]", "%", "b"),
+        CatchKind::Castle => ("[C]", "+", "O"),
+        CatchKind::Potion => ("[P]", "!", "~"),
+        CatchKind::Poker => ("[_]", "*", "x"),
+    }
+}
+
+fn draw_micro_catch(
+    state: &AppState,
+    name: &str,
+    kind: CatchKind,
+    w: i32,
+    h: i32,
+    player_x: i32,
+    objects: &[(i32, f64, bool)],
+    lives: i32,
+    score: u32,
+    caught: u32,
+    target: u32,
+    recipe: usize,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - h as usize / 2 + 1;
+    let left = cols / 2 - w as usize / 2;
+    let (player, good, bad) = catch_sprites(kind);
+    let extra = if matches!(kind, CatchKind::Potion) {
+        format!("   Recipe step {}", recipe + 1)
+    } else if matches!(
+        kind,
+        CatchKind::Tennis | CatchKind::Cricket | CatchKind::Pinball
+    ) {
+        "   Space times the hit".to_string()
+    } else {
+        String::new()
+    };
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   Goal {caught}/{target}{extra}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        h as usize + 2,
+        w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y, is_good) in objects {
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + x as usize,
+            if is_good { good } else { bad },
+            &theme,
+            if is_good { Role::Success } else { Role::Danger },
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + h as usize - 2,
+        left + player_x as usize - player.len() / 2,
+        player,
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_poker_draw(state: &mut AppState, name: &str) {
+    loop {
+        let mut hand = Vec::new();
+        let mut draws = 0u32;
+        while hand.len() < 5 {
+            draw_poker_hand(state, name, &hand, draws, "Space draws a card.");
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Enter | Key::Space => {
+                        hand.push(state.rng.range(1, 13) as u8);
+                        draws += 1;
+                        play_sound(state, "score");
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let mut counts = [0u8; 14];
+        for &card in &hand {
+            counts[card as usize] += 1;
+        }
+        let pairs = counts.iter().filter(|&&n| n == 2).count() as u32;
+        let triples = counts.iter().filter(|&&n| n == 3).count() as u32;
+        let quads = counts.iter().filter(|&&n| n == 4).count() as u32;
+        let score = quads * 700
+            + triples * 320
+            + pairs * 150
+            + hand.iter().map(|&c| c as u32).sum::<u32>() * 4;
+        draw_poker_hand(state, name, &hand, draws, "Hand scored.");
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[format!("Poker score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn draw_poker_hand(state: &AppState, name: &str, hand: &[u8], draws: u32, message: &str) {
+    let (_, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let cards = hand
+        .iter()
+        .map(|&card| blackjack_card_label(card).to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        5,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        9,
+        &format!("Draw {draws}/5"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    center(
+        &mut buf,
+        12,
+        &format!("[ {cards} ]"),
+        &theme,
+        Role::Success,
+        true,
+        cols,
+    );
+    center(&mut buf, 16, message, &theme, Role::Secondary, true, cols);
+    flush(&buf);
+}
+
+fn game_micro_aim(state: &mut AppState, name: &str, kind: AimKind) {
+    if !require_size(state, 20, 58, name) {
+        return;
+    }
+    loop {
+        let mut aim = 0i32;
+        let mut power = 5i32;
+        let mut shots = 0u32;
+        let mut score = 0u32;
+        let max_shots = 8u32;
+        let mut wind = state.rng.range(-2, 2);
+        while shots < max_shots {
+            draw_micro_aim(state, name, kind, aim, power, wind, shots, max_shots, score);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Left | Key::Char('a') => aim = (aim - 1).max(-5),
+                    Key::Right | Key::Char('d') => aim = (aim + 1).min(5),
+                    Key::Up | Key::Char('w') => power = (power + 1).min(10),
+                    Key::Down | Key::Char('s') => power = (power - 1).max(1),
+                    Key::Enter | Key::Space => {
+                        let ideal_power = match kind {
+                            AimKind::Basket => 7,
+                            AimKind::Archery => 6,
+                            AimKind::Curling => 5,
+                        };
+                        let error = (aim + wind).abs() + (power - ideal_power).abs();
+                        let points = match error {
+                            0 => 100,
+                            1 => 60,
+                            2 => 35,
+                            3 => 15,
+                            _ => 0,
+                        };
+                        score += points;
+                        shots += 1;
+                        wind = state.rng.range(-2, 2);
+                        if points > 0 {
+                            play_sound(state, "score");
+                        } else {
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[format!("Final score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn draw_micro_aim(
+    state: &AppState,
+    name: &str,
+    kind: AimKind,
+    aim: i32,
+    power: i32,
+    wind: i32,
+    shots: u32,
+    max_shots: u32,
+    score: u32,
+) {
+    let (_, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let target = match kind {
+        AimKind::Basket => "(O)",
+        AimKind::Archery => "<O>",
+        AimKind::Curling => "((O))",
+    };
+    let marker_left = (aim + 5) as usize;
+    let marker_right = (5 - aim) as usize;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        3,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        6,
+        &format!("Score {score}   Shot {shots}/{max_shots}   Wind {wind}   Power {power}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    center(&mut buf, 9, target, &theme, Role::Success, true, cols);
+    center(
+        &mut buf,
+        12,
+        &format!(
+            "Aim: {}^{}",
+            " ".repeat(marker_left),
+            " ".repeat(marker_right)
+        ),
+        &theme,
+        Role::Highlight,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        16,
+        if matches!(kind, AimKind::Curling) {
+            "A/D aim   W/S weight   Space slides"
+        } else {
+            "A/D aim   W/S power   Space shoots"
+        },
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_micro_sequence(state: &mut AppState, name: &str, kind: SequenceKind) {
+    loop {
+        let keys = ['w', 'a', 's', 'd'];
+        let target_len = match state.difficulty_index {
+            0 => 5,
+            1 => 7,
+            _ => 9,
+        };
+        let mut sequence = Vec::new();
+        for _ in 0..target_len {
+            sequence.push(keys[state.rng.usize(keys.len())]);
+        }
+        let mut index = 0usize;
+        let mut mistakes = 0u32;
+        while index < sequence.len() && mistakes < 4 {
+            draw_micro_sequence(state, name, kind, &sequence, index, mistakes);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Char(ch) if ['w', 'a', 's', 'd'].contains(&ch) => {
+                        if ch == sequence[index] {
+                            index += 1;
+                            play_sound(state, "score");
+                        } else {
+                            mistakes += 1;
+                            play_sound(state, "alert");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let score = if index == sequence.len() {
+            600u32.saturating_sub(mistakes * 60)
+        } else {
+            index as u32 * 40
+        };
+        record_score(state, name, score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Sequence score: {score}"),
+                format!("Mistakes: {mistakes}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_micro_sequence(
+    state: &AppState,
+    name: &str,
+    kind: SequenceKind,
+    sequence: &[char],
+    index: usize,
+    mistakes: u32,
+) {
+    let (_, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let label = match kind {
+        SequenceKind::Factory => "Assemble the recipe",
+        SequenceKind::Duel => "Cast the spell chain",
+        SequenceKind::Trick => "Land the trick combo",
+    };
+    let shown = sequence
+        .iter()
+        .enumerate()
+        .map(|(i, ch)| {
+            if i < index {
+                format!("({ch})")
+            } else {
+                format!(" {ch} ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        4,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(&mut buf, 7, label, &theme, Role::Accent, false, cols);
+    center(&mut buf, 11, &shown, &theme, Role::Success, true, cols);
+    center(
+        &mut buf,
+        15,
+        &format!(
+            "Step {}/{}   Mistakes {mistakes}/4",
+            index + 1,
+            sequence.len()
+        ),
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_snake(state: &mut AppState) {
+    if !require_size(state, 22, 58, "Snake") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(42, 16, 118, 40);
+        let mut snake = VecDeque::new();
+        snake.push_front((board_w / 2, board_h / 2));
+        snake.push_back((board_w / 2 - 1, board_h / 2));
+        snake.push_back((board_w / 2 - 2, board_h / 2));
+        let mut dir = (1, 0);
+        let mut food = random_empty(state, board_w, board_h, &snake.iter().copied().collect());
+        let mut score = 0u32;
+        let tick = (state.difficulty().tick_ms as f64 * 1.25) as u64;
+        let mut alive = true;
+        while alive {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') if dir != (0, 1) => dir = (0, -1),
+                    Key::Down | Key::Char('s') if dir != (0, -1) => dir = (0, 1),
+                    Key::Left | Key::Char('a') if dir != (1, 0) => dir = (-1, 0),
+                    Key::Right | Key::Char('d') if dir != (-1, 0) => dir = (1, 0),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            let (hx, hy) = snake[0];
+            let new_head = (hx + dir.0, hy + dir.1);
+            if new_head.0 < 0
+                || new_head.1 < 0
+                || new_head.0 >= board_w
+                || new_head.1 >= board_h
+                || snake.contains(&new_head)
+            {
+                alive = false;
+            } else {
+                snake.push_front(new_head);
+                if new_head == food {
+                    score += 10;
+                    play_sound(state, "score");
+                    let occupied: HashSet<_> = snake.iter().copied().collect();
+                    food = random_empty(state, board_w, board_h, &occupied);
+                } else {
+                    snake.pop_back();
+                }
+            }
+            draw_snake(state, board_w, board_h, &snake, food, score);
+            sleep_frame(frame, tick);
+        }
+        record_score(state, "Snake", score);
+        if !wait_menu(
+            state,
+            "Snake",
+            &[
+                format!("Game over. Score: {score}"),
+                "You ran out of room.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn random_empty(
+    state: &mut AppState,
+    w: i32,
+    h: i32,
+    occupied: &HashSet<(i32, i32)>,
+) -> (i32, i32) {
+    loop {
+        let p = (state.rng.range(0, w - 1), state.rng.range(0, h - 1));
+        if !occupied.contains(&p) {
+            return p;
+        }
+    }
+}
+
+fn draw_snake(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    snake: &VecDeque<(i32, i32)>,
+    food: (i32, i32),
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "SNAKE", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "Score {score}   {}   WASD/arrows move   Q menu",
+            state.difficulty().name
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    put(
+        &mut buf,
+        top + food.1 as usize,
+        left + food.0 as usize,
+        "*",
+        &theme,
+        Role::Success,
+        true,
+    );
+    for (i, (x, y)) in snake.iter().enumerate() {
+        put(
+            &mut buf,
+            top + *y as usize,
+            left + *x as usize,
+            if i == 0 { "@" } else { "o" },
+            &theme,
+            Role::Secondary,
+            true,
+        );
+    }
+    flush(&buf);
+}
+
+fn game_pong(state: &mut AppState) {
+    if !require_size(state, 22, 70, "Pong") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(60, 17, 132, 38);
+        let paddle_h = match state.difficulty_index {
+            0 => 7,
+            1 => 6,
+            _ => 5,
+        };
+        let mut player_y = board_h / 2 - paddle_h / 2;
+        let mut ai_y = player_y;
+        let mut ball_x = board_w as f64 / 2.0;
+        let mut ball_y = board_h as f64 / 2.0;
+        let mut vel_x = match state.difficulty_index {
+            0 => 0.60,
+            1 => 0.78,
+            _ => 0.96,
+        };
+        let mut vel_y = match state.difficulty_index {
+            0 => 0.30,
+            1 => 0.38,
+            _ => 0.48,
+        };
+        let mut player_score = 0;
+        let mut ai_score = 0;
+        let win_score = 5;
+        while player_score < win_score && ai_score < win_score {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => player_y = (player_y - 2).max(0),
+                    Key::Down | Key::Char('s') => player_y = (player_y + 2).min(board_h - paddle_h),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            let target = ball_y.round() as i32 - paddle_h / 2 + state.rng.range(-1, 1);
+            let ai_step = if state.difficulty_index == 0 { 1 } else { 2 };
+            if ai_y + paddle_h / 2 < target {
+                ai_y = (ai_y + ai_step).min(board_h - paddle_h);
+            } else if ai_y + paddle_h / 2 > target {
+                ai_y = (ai_y - ai_step).max(0);
+            }
+            ball_x += vel_x;
+            ball_y += vel_y;
+            if ball_y <= 0.0 || ball_y >= (board_h - 1) as f64 {
+                vel_y = -vel_y;
+                ball_y = ball_y.clamp(0.0, (board_h - 1) as f64);
+                play_sound(state, "wall");
+            }
+            let by = ball_y.round() as i32;
+            if ball_x <= 2.0 && vel_x < 0.0 && by >= player_y && by < player_y + paddle_h {
+                vel_x = vel_x.abs().min(1.35) + 0.04;
+                vel_y += ((by - player_y) as f64 / paddle_h as f64 - 0.5) * 0.30;
+                play_sound(state, "paddle");
+            }
+            if ball_x >= (board_w - 3) as f64 && vel_x > 0.0 && by >= ai_y && by < ai_y + paddle_h {
+                vel_x = -vel_x.abs().min(1.35) - 0.04;
+                vel_y += ((by - ai_y) as f64 / paddle_h as f64 - 0.5) * 0.30;
+                play_sound(state, "paddle");
+            }
+            if ball_x < 0.0 {
+                ai_score += 1;
+                play_sound(state, "score");
+                reset_pong_ball(
+                    &mut ball_x,
+                    &mut ball_y,
+                    &mut vel_x,
+                    &mut vel_y,
+                    board_w,
+                    board_h,
+                    true,
+                );
+            } else if ball_x >= board_w as f64 {
+                player_score += 1;
+                play_sound(state, "score");
+                reset_pong_ball(
+                    &mut ball_x,
+                    &mut ball_y,
+                    &mut vel_x,
+                    &mut vel_y,
+                    board_w,
+                    board_h,
+                    false,
+                );
+            }
+            draw_pong(
+                state,
+                board_w,
+                board_h,
+                paddle_h,
+                player_y,
+                ai_y,
+                ball_x,
+                ball_y,
+                player_score,
+                ai_score,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        let score = (player_score * 100 - ai_score * 25).max(0) as u32;
+        record_score(state, "Pong", score);
+        let result = if player_score > ai_score {
+            "You won the set."
+        } else {
+            "CPU took the set."
+        };
+        if !wait_menu(
+            state,
+            "Pong",
+            &[
+                result.to_string(),
+                format!("Final score: {player_score}-{ai_score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn reset_pong_ball(
+    ball_x: &mut f64,
+    ball_y: &mut f64,
+    vel_x: &mut f64,
+    vel_y: &mut f64,
+    w: i32,
+    h: i32,
+    right: bool,
+) {
+    *ball_x = w as f64 / 2.0;
+    *ball_y = h as f64 / 2.0;
+    *vel_x = if right { vel_x.abs() } else { -vel_x.abs() };
+    *vel_y = if *vel_y >= 0.0 { 0.36 } else { -0.36 };
+}
+
+fn draw_pong(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    paddle_h: i32,
+    player_y: i32,
+    ai_y: i32,
+    ball_x: f64,
+    ball_y: f64,
+    player_score: i32,
+    ai_score: i32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "PONG", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("You {player_score}   CPU {ai_score}   fast ball   W/S move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for y in 0..board_h {
+        if y % 2 == 0 {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + board_w as usize / 2,
+                "|",
+                &theme,
+                Role::Muted,
+                false,
+            );
+        }
+    }
+    for offset in 0..paddle_h {
+        put(
+            &mut buf,
+            top + (player_y + offset) as usize,
+            left + 1,
+            "#",
+            &theme,
+            Role::Secondary,
+            true,
+        );
+        put(
+            &mut buf,
+            top + (ai_y + offset) as usize,
+            left + board_w as usize - 2,
+            "#",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + ball_y.round().clamp(0.0, (board_h - 1) as f64) as usize,
+        left + ball_x.round().clamp(0.0, (board_w - 1) as f64) as usize,
+        "O",
+        &theme,
+        Role::Success,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_tetris(state: &mut AppState) {
+    if !require_size(state, 24, 58, "Tetris") {
+        return;
+    }
+    loop {
+        let cols = 10;
+        let rows = 18;
+        let mut board = vec![vec![0u8; cols]; rows];
+        let mut shape = state.rng.usize(7);
+        let mut next_shape = state.rng.usize(7);
+        let mut rot = 0usize;
+        let mut px = 3i32;
+        let mut py = 0i32;
+        let mut score = 0u32;
+        let mut lines = 0u32;
+        let mut last_drop = Instant::now();
+        let mut drop_ms = match state.difficulty_index {
+            0 => 720,
+            1 => 520,
+            _ => 360,
+        };
+        let mut alive = true;
+        while alive {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') if !piece_hits(&board, shape, rot, px - 1, py) => {
+                        px -= 1
+                    }
+                    Key::Right | Key::Char('d') if !piece_hits(&board, shape, rot, px + 1, py) => {
+                        px += 1
+                    }
+                    Key::Down | Key::Char('s') if !piece_hits(&board, shape, rot, px, py + 1) => {
+                        py += 1
+                    }
+                    Key::Up | Key::Char('w') => {
+                        let new_rot = (rot + 1) % 4;
+                        if !piece_hits(&board, shape, new_rot, px, py) {
+                            rot = new_rot;
+                        }
+                    }
+                    Key::Space => {
+                        while !piece_hits(&board, shape, rot, px, py + 1) {
+                            py += 1;
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_drop.elapsed() >= Duration::from_millis(drop_ms) {
+                if piece_hits(&board, shape, rot, px, py + 1) {
+                    lock_piece(&mut board, shape, rot, px, py);
+                    let cleared = clear_lines(&mut board);
+                    if cleared > 0 {
+                        lines += cleared as u32;
+                        score += [0, 100, 300, 500, 800][cleared] as u32;
+                        drop_ms = drop_ms.saturating_sub((cleared * 8) as u64).max(120);
+                        play_sound(state, "score");
+                    }
+                    shape = next_shape;
+                    next_shape = state.rng.usize(7);
+                    rot = 0;
+                    px = 3;
+                    py = 0;
+                    if piece_hits(&board, shape, rot, px, py) {
+                        alive = false;
+                    }
+                } else {
+                    py += 1;
+                    score += 1;
+                }
+                last_drop = Instant::now();
+            }
+            draw_tetris(state, &board, shape, rot, px, py, next_shape, score, lines);
+            sleep_frame(frame, 35);
+        }
+        record_score(state, "Tetris", score);
+        if !wait_menu(
+            state,
+            "Tetris",
+            &[
+                format!("Game over. Score: {score}"),
+                format!("Lines cleared: {lines}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn base_shape(shape: usize) -> [(i32, i32); 4] {
+    match shape {
+        0 => [(0, 1), (1, 1), (2, 1), (3, 1)],
+        1 => [(0, 0), (0, 1), (1, 1), (2, 1)],
+        2 => [(2, 0), (0, 1), (1, 1), (2, 1)],
+        3 => [(1, 0), (2, 0), (1, 1), (2, 1)],
+        4 => [(1, 0), (2, 0), (0, 1), (1, 1)],
+        5 => [(1, 0), (0, 1), (1, 1), (2, 1)],
+        _ => [(0, 0), (1, 0), (1, 1), (2, 1)],
+    }
+}
+
+fn piece_cells(shape: usize, rot: usize, px: i32, py: i32) -> Vec<(i32, i32)> {
+    base_shape(shape)
+        .iter()
+        .map(|&(mut x, mut y)| {
+            if shape != 3 {
+                for _ in 0..rot {
+                    let old_x = x;
+                    x = 3 - y;
+                    y = old_x;
+                }
+            }
+            (px + x, py + y)
+        })
+        .collect()
+}
+
+fn piece_hits(board: &[Vec<u8>], shape: usize, rot: usize, px: i32, py: i32) -> bool {
+    for (x, y) in piece_cells(shape, rot, px, py) {
+        if x < 0 || x >= board[0].len() as i32 || y >= board.len() as i32 {
+            return true;
+        }
+        if y >= 0 && board[y as usize][x as usize] != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn lock_piece(board: &mut [Vec<u8>], shape: usize, rot: usize, px: i32, py: i32) {
+    for (x, y) in piece_cells(shape, rot, px, py) {
+        if y >= 0 && y < board.len() as i32 && x >= 0 && x < board[0].len() as i32 {
+            board[y as usize][x as usize] = (shape + 1) as u8;
+        }
+    }
+}
+
+fn clear_lines(board: &mut Vec<Vec<u8>>) -> usize {
+    let cols = board[0].len();
+    let before = board.len();
+    board.retain(|row| row.iter().any(|&cell| cell == 0));
+    let cleared = before - board.len();
+    for _ in 0..cleared {
+        board.insert(0, vec![0; cols]);
+    }
+    cleared
+}
+
+fn draw_tetris(
+    state: &AppState,
+    board: &[Vec<u8>],
+    shape: usize,
+    rot: usize,
+    px: i32,
+    py: i32,
+    next_shape: usize,
+    score: u32,
+    lines: u32,
+) {
+    let (term_rows, term_cols) = terminal_size();
+    let theme = state.theme().clone();
+    let rows = board.len();
+    let cols = board[0].len();
+    let top = term_rows / 2 - rows / 2;
+    let left = term_cols / 2 - 20;
+    let active: HashSet<_> = piece_cells(shape, rot, px, py).into_iter().collect();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "TETRIS", &theme, Role::Title, true, term_cols);
+    draw_box(
+        &mut buf,
+        top,
+        left,
+        rows + 2,
+        cols * 2 + 2,
+        "WELL",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for y in 0..rows {
+        for x in 0..cols {
+            let filled = board[y][x] != 0 || active.contains(&(x as i32, y as i32));
+            put(
+                &mut buf,
+                top + 1 + y,
+                left + 1 + x * 2,
+                if filled { "[]" } else { "  " },
+                &theme,
+                if filled { Role::Secondary } else { Role::Muted },
+                filled,
+            );
+        }
+    }
+    let info_left = left + cols * 2 + 5;
+    draw_box(
+        &mut buf,
+        top,
+        info_left,
+        11,
+        24,
+        "STATUS",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    put(
+        &mut buf,
+        top + 2,
+        info_left + 2,
+        &format!("Score: {score}"),
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + 3,
+        info_left + 2,
+        &format!("Lines: {lines}"),
+        &theme,
+        Role::Secondary,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 4,
+        info_left + 2,
+        &format!("Next: {}", ["I", "J", "L", "O", "S", "T", "Z"][next_shape]),
+        &theme,
+        Role::Accent,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 6,
+        info_left + 2,
+        "Arrows/WASD move",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 7,
+        info_left + 2,
+        "Up/W rotate",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 8,
+        info_left + 2,
+        "Space hard drop",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 9,
+        info_left + 2,
+        "Q menu",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    flush(&buf);
+}
+
+fn game_breakout(state: &mut AppState) {
+    if !require_size(state, 22, 70, "Breakout") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(58, 17, 132, 38);
+        let paddle_w = match state.difficulty_index {
+            0 => 12,
+            1 => 10,
+            _ => 8,
+        };
+        let mut paddle_x = board_w / 2 - paddle_w / 2;
+        let mut ball_x = board_w as f64 / 2.0;
+        let mut ball_y = board_h as f64 - 4.0;
+        let mut vel_x = 0.42 * state.difficulty().speed;
+        let mut vel_y = -0.36 * state.difficulty().speed;
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut bricks = HashSet::new();
+        for y in 1..5 {
+            for x in (3..board_w - 3).step_by(5) {
+                bricks.insert((x, y));
+            }
+        }
+        while lives > 0 && !bricks.is_empty() {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => paddle_x = (paddle_x - 3).max(1),
+                    Key::Right | Key::Char('d') => {
+                        paddle_x = (paddle_x + 3).min(board_w - paddle_w - 1)
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            ball_x += vel_x;
+            ball_y += vel_y;
+            if ball_x <= 1.0 || ball_x >= (board_w - 2) as f64 {
+                vel_x = -vel_x;
+                play_sound(state, "wall");
+            }
+            if ball_y <= 1.0 {
+                vel_y = vel_y.abs();
+                play_sound(state, "wall");
+            }
+            let bx = ball_x.round() as i32;
+            let by = ball_y.round() as i32;
+            if by == board_h - 2 && bx >= paddle_x && bx < paddle_x + paddle_w {
+                vel_y = -vel_y.abs();
+                vel_x += ((bx - paddle_x) as f64 / paddle_w as f64 - 0.5) * 0.16;
+                play_sound(state, "paddle");
+            }
+            let hit_brick = bricks
+                .iter()
+                .copied()
+                .find(|(x, y)| by == *y && bx >= *x && bx < *x + 4);
+            if let Some(brick) = hit_brick {
+                bricks.remove(&brick);
+                score += 25;
+                vel_y = -vel_y;
+                play_sound(state, "score");
+            }
+            if ball_y > board_h as f64 {
+                lives -= 1;
+                play_sound(state, "alert");
+                ball_x = board_w as f64 / 2.0;
+                ball_y = board_h as f64 - 4.0;
+                vel_y = -vel_y.abs();
+            }
+            draw_breakout(
+                state, board_w, board_h, paddle_w, paddle_x, ball_x, ball_y, lives, score, &bricks,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, "Breakout", score);
+        let outcome = if bricks.is_empty() {
+            "Board cleared."
+        } else {
+            "Out of lives."
+        };
+        if !wait_menu(
+            state,
+            "Breakout",
+            &[outcome.to_string(), format!("Score: {score}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_breakout(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    paddle_w: i32,
+    paddle_x: i32,
+    ball_x: f64,
+    ball_y: f64,
+    lives: i32,
+    score: u32,
+    bricks: &HashSet<(i32, i32)>,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "BREAKOUT", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   A/D move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in bricks {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "====",
+            &theme,
+            Role::Secondary,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + ball_y.round().clamp(0.0, (board_h - 1) as f64) as usize,
+        left + ball_x.round().clamp(0.0, (board_w - 1) as f64) as usize,
+        "O",
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + board_h as usize - 2,
+        left + paddle_x as usize,
+        &"=".repeat(paddle_w as usize),
+        &theme,
+        Role::Accent,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_invaders(state: &mut AppState) {
+    if !require_size(state, 24, 74, "Space Invaders") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(64, 18, 140, 38);
+        let mut player_x = board_w / 2;
+        let mut bullets: Vec<(i32, i32)> = Vec::new();
+        let mut bombs: Vec<(i32, f64)> = Vec::new();
+        let mut invaders = Vec::new();
+        let alien_cols = if board_w >= 104 { 12 } else { 9 };
+        let alien_rows = if board_h >= 26 { 5 } else { 4 };
+        let alien_span = (alien_cols - 1) * 5 + 3;
+        let alien_start = ((board_w - alien_span) / 2).max(3);
+        for row in 0..alien_rows {
+            for col in 0..alien_cols {
+                invaders.push((alien_start + col * 5, 2 + row * 2));
+            }
+        }
+        let mut shields = HashSet::new();
+        let shield_count = if board_w >= 104 { 6 } else { 4 };
+        let shield_y = (board_h - 6).max(12);
+        for block in 0..shield_count {
+            let center_x = ((board_w as f64) * (block as f64 + 1.0) / (shield_count as f64 + 1.0))
+                .round() as i32;
+            for y in shield_y..shield_y + 2 {
+                for x in center_x - 3..=center_x + 3 {
+                    shields.insert((x, y));
+                }
+            }
+        }
+        let mut dir = 1;
+        let mut last_move = Instant::now();
+        let mut last_bomb = Instant::now();
+        let mut score = 0u32;
+        let mut alive = true;
+        while alive && !invaders.is_empty() {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => player_x = (player_x - 3).max(2),
+                    Key::Right | Key::Char('d') => player_x = (player_x + 3).min(board_w - 3),
+                    Key::Space
+                        if bullets.len()
+                            < match state.difficulty_index {
+                                0 => 5,
+                                1 => 4,
+                                _ => 3,
+                            } =>
+                    {
+                        bullets.push((player_x, board_h - 3));
+                        play_sound(state, "paddle");
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            for bullet in &mut bullets {
+                bullet.1 -= 1;
+            }
+            bullets.retain(|(_, y)| *y > 0);
+            for bomb in &mut bombs {
+                bomb.1 += 0.20 * state.difficulty().speed;
+            }
+            bombs.retain(|(_, y)| *y < board_h as f64);
+            let move_gap =
+                Duration::from_millis((640.0 / state.difficulty().speed).max(180.0) as u64);
+            if last_move.elapsed() >= move_gap {
+                let edge = invaders
+                    .iter()
+                    .any(|(x, _)| (*x >= board_w - 5 && dir > 0) || (*x <= 3 && dir < 0));
+                if edge {
+                    for alien in &mut invaders {
+                        alien.1 += 1;
+                    }
+                    dir *= -1;
+                } else {
+                    for alien in &mut invaders {
+                        alien.0 += dir;
+                    }
+                }
+                last_move = Instant::now();
+            }
+            if last_bomb.elapsed()
+                >= Duration::from_millis((900.0 / state.difficulty().speed) as u64)
+                && !invaders.is_empty()
+            {
+                let alien = invaders[state.rng.usize(invaders.len())];
+                bombs.push((alien.0, alien.1 as f64 + 1.0));
+                last_bomb = Instant::now();
+            }
+            let mut hit_aliens = HashSet::new();
+            let mut used_bullets = HashSet::new();
+            for (bi, bullet) in bullets.iter().enumerate() {
+                if shields.remove(bullet) {
+                    used_bullets.insert(bi);
+                }
+                for (ai, alien) in invaders.iter().enumerate() {
+                    if (bullet.0 - alien.0).abs() <= 1 && (bullet.1 - alien.1).abs() <= 1 {
+                        hit_aliens.insert(ai);
+                        used_bullets.insert(bi);
+                    }
+                }
+            }
+            if !hit_aliens.is_empty() {
+                score += hit_aliens.len() as u32 * 40;
+                play_sound(state, "score");
+            }
+            invaders = invaders
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, alien)| (!hit_aliens.contains(&i)).then_some(alien))
+                .collect();
+            bullets = bullets
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, bullet)| (!used_bullets.contains(&i)).then_some(bullet))
+                .collect();
+            for bomb in &bombs {
+                let p = (bomb.0, bomb.1.round() as i32);
+                shields.remove(&p);
+                if (p.0 - player_x).abs() <= 1 && p.1 >= board_h - 3 {
+                    alive = false;
+                }
+            }
+            if invaders.iter().any(|(_, y)| *y >= board_h - 4) {
+                alive = false;
+            }
+            draw_invaders(
+                state, board_w, board_h, player_x, &bullets, &bombs, &invaders, &shields, score,
+            );
+            sleep_frame(frame, 45);
+        }
+        record_score(state, "Space Invaders", score);
+        let outcome = if invaders.is_empty() {
+            "Alien block cleared."
+        } else {
+            "The invasion landed."
+        };
+        if !wait_menu(
+            state,
+            "Space Invaders",
+            &[outcome.to_string(), format!("Score: {score}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_invaders(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    player_x: i32,
+    bullets: &[(i32, i32)],
+    bombs: &[(i32, f64)],
+    invaders: &[(i32, i32)],
+    shields: &HashSet<(i32, i32)>,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        "SPACE INVADERS",
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Shields online   A/D move   Space fire   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in invaders {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + (x - 1) as usize,
+            "<M>",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    for &(x, y) in shields {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "#",
+            &theme,
+            Role::Secondary,
+            true,
+        );
+    }
+    for &(x, y) in bullets {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "|",
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    for &(x, y) in bombs {
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + x as usize,
+            "!",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + board_h as usize - 2,
+        left + player_x as usize - 1,
+        "/A\\",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_missile(state: &mut AppState) {
+    if !require_size(state, 24, 76, "Missile Command") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(66, 18, 140, 38);
+        let mut cursor = (board_w / 2, board_h / 2);
+        let city_count = if board_w >= 104 { 7 } else { 5 };
+        let city_xs: Vec<i32> = (0..city_count)
+            .map(|index| {
+                ((board_w as f64) * (index as f64 + 1.0) / (city_count as f64 + 1.0)).round() as i32
+            })
+            .collect();
+        let mut cities = vec![true; city_xs.len()];
+        let mut missiles: Vec<(f64, f64, f64, f64, usize)> = Vec::new();
+        let mut explosions: Vec<(i32, i32, i32)> = Vec::new();
+        let mut last_spawn = Instant::now();
+        let mut score = 0u32;
+        while cities.iter().any(|&city| city) {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => cursor.1 = (cursor.1 - 1).max(1),
+                    Key::Down | Key::Char('s') => cursor.1 = (cursor.1 + 1).min(board_h - 3),
+                    Key::Left | Key::Char('a') => cursor.0 = (cursor.0 - 2).max(1),
+                    Key::Right | Key::Char('d') => cursor.0 = (cursor.0 + 2).min(board_w - 2),
+                    Key::Space => {
+                        explosions.push((cursor.0, cursor.1, 1));
+                        play_sound(state, "paddle");
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((1050.0 / state.difficulty().speed) as u64)
+            {
+                let target = state.rng.usize(city_xs.len());
+                let sx = state.rng.range(1, board_w - 2) as f64;
+                let tx = city_xs[target] as f64;
+                let ty = board_h as f64 - 2.0;
+                let speed = 0.13 * state.difficulty().speed;
+                let dx = tx - sx;
+                let dy = ty;
+                let len = (dx * dx + dy * dy).sqrt();
+                missiles.push((sx, 0.0, dx / len * speed, dy / len * speed, target));
+                last_spawn = Instant::now();
+            }
+            for missile in &mut missiles {
+                missile.0 += missile.2;
+                missile.1 += missile.3;
+            }
+            for explosion in &mut explosions {
+                explosion.2 += 1;
+            }
+            explosions.retain(|(_, _, r)| {
+                *r <= match state.difficulty_index {
+                    0 => 10,
+                    1 => 8,
+                    _ => 6,
+                }
+            });
+            let mut destroyed = HashSet::new();
+            for (mi, missile) in missiles.iter().enumerate() {
+                for &(ex, ey, r) in &explosions {
+                    let dx = missile.0 - ex as f64;
+                    let dy = missile.1 - ey as f64;
+                    if dx * dx + dy * dy <= (r * r) as f64 {
+                        destroyed.insert(mi);
+                    }
+                }
+            }
+            if !destroyed.is_empty() {
+                score += destroyed.len() as u32 * 50;
+                play_sound(state, "score");
+            }
+            let mut kept = Vec::new();
+            for (i, missile) in missiles.into_iter().enumerate() {
+                if destroyed.contains(&i) {
+                    continue;
+                }
+                if missile.1 >= board_h as f64 - 2.0 {
+                    if missile.4 < cities.len() {
+                        cities[missile.4] = false;
+                        play_sound(state, "alert");
+                    }
+                } else {
+                    kept.push(missile);
+                }
+            }
+            missiles = kept;
+            draw_missile(
+                state,
+                board_w,
+                board_h,
+                cursor,
+                &city_xs,
+                &cities,
+                &missiles,
+                &explosions,
+                score,
+            );
+            sleep_frame(frame, 45);
+        }
+        record_score(state, "Missile Command", score);
+        if !wait_menu(
+            state,
+            "Missile Command",
+            &[
+                format!("All cities lost. Score: {score}"),
+                "You held the line as long as you could.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_missile(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    cursor: (i32, i32),
+    city_xs: &[i32],
+    cities: &[bool],
+    missiles: &[(f64, f64, f64, f64, usize)],
+    explosions: &[(i32, i32, i32)],
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        "MISSILE COMMAND",
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   WASD aim   Space blast   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for missile in missiles {
+        put(
+            &mut buf,
+            top + missile.1.round().max(0.0) as usize,
+            left + missile.0.round().clamp(0.0, (board_w - 1) as f64) as usize,
+            "v",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    for &(x, y, r) in explosions {
+        for yy in (y - r).max(1)..=(y + r).min(board_h - 2) {
+            for xx in (x - r).max(1)..=(x + r).min(board_w - 2) {
+                let dx = xx - x;
+                let dy = yy - y;
+                if dx * dx + dy * dy <= r * r && (dx.abs() + dy.abs()) % 3 == 0 {
+                    put(
+                        &mut buf,
+                        top + yy as usize,
+                        left + xx as usize,
+                        ".",
+                        &theme,
+                        Role::Success,
+                        false,
+                    );
+                }
+            }
+        }
+    }
+    for (i, &x) in city_xs.iter().enumerate() {
+        put(
+            &mut buf,
+            top + board_h as usize - 2,
+            left + x as usize - 2,
+            if cities[i] { "[###]" } else { "[   ]" },
+            &theme,
+            if cities[i] {
+                Role::Secondary
+            } else {
+                Role::Danger
+            },
+            cities[i],
+        );
+    }
+    put(
+        &mut buf,
+        top + cursor.1 as usize,
+        left + cursor.0 as usize,
+        "+",
+        &theme,
+        Role::Title,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_meteor(state: &mut AppState) {
+    falling_game(state, "Meteor Dodge", "/A\\", None, "*", 0, true);
+}
+
+fn game_star(state: &mut AppState) {
+    falling_game(state, "Star Catcher", "[@]", Some("*"), "!", 15, false);
+}
+
+fn game_block_drop(state: &mut AppState) {
+    falling_game(state, "Block Drop", "[_]", Some("[]"), "XX", 10, false);
+}
+
+fn falling_game(
+    state: &mut AppState,
+    name: &str,
+    player_sprite: &str,
+    good_sprite: Option<&str>,
+    bad_sprite: &str,
+    good_value: u32,
+    survival_score: bool,
+) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    let combo_mode = matches!(
+        name,
+        "Comet Catcher" | "Gem Rush" | "Data Storm" | "Rain Runner"
+    );
+    let cargo_goal = if name == "Cargo Catch" {
+        Some(match state.difficulty_index {
+            0 => 8,
+            1 => 11,
+            _ => 14,
+        })
+    } else {
+        None
+    };
+    let oxygen_mode = name == "Pearl Diver";
+    loop {
+        let (board_w, board_h) = full_board(52, 17, 132, 38);
+        let mut player = (board_w / 2, board_h - 2);
+        let mut objects: Vec<(i32, f64, bool)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut combo = 1u32;
+        let mut cargo = 0i32;
+        let mut oxygen = 100i32;
+        let mut completed = false;
+        let mut last_spawn = Instant::now();
+        let mut oxygen_tick = Instant::now();
+        while lives > 0 && !completed {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => player.0 = (player.0 - 2).max(1),
+                    Key::Right | Key::Char('d') => player.0 = (player.0 + 2).min(board_w - 3),
+                    Key::Up | Key::Char('w') => player.1 = (player.1 - 1).max(1),
+                    Key::Down | Key::Char('s') => player.1 = (player.1 + 1).min(board_h - 2),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((520.0 / state.difficulty().speed) as u64)
+            {
+                let good = good_sprite.is_some() && state.rng.chance(2, 5);
+                objects.push((state.rng.range(2, board_w - 4), 1.0, good));
+                if state.difficulty_index > 0 && state.rng.chance(1, 5) {
+                    objects.push((state.rng.range(2, board_w - 4), 1.0, false));
+                }
+                last_spawn = Instant::now();
+            }
+            for object in &mut objects {
+                object.1 += 0.25 * state.difficulty().speed;
+            }
+            if oxygen_mode && oxygen_tick.elapsed() >= Duration::from_millis(350) {
+                oxygen -= 1 + state.difficulty_index as i32;
+                oxygen_tick = Instant::now();
+                if oxygen <= 0 {
+                    lives -= 1;
+                    oxygen = 100;
+                    play_sound(state, "alert");
+                }
+            }
+            let mut kept = Vec::new();
+            for object in objects.into_iter() {
+                let oy = object.1.round() as i32;
+                if oy >= board_h {
+                    if object.2 && !survival_score {
+                        score = score.saturating_sub(3);
+                        if combo_mode {
+                            combo = 1;
+                        }
+                        if oxygen_mode {
+                            oxygen = (oxygen - 6).max(0);
+                        }
+                    }
+                    continue;
+                }
+                if oy == player.1 && (object.0 - player.0).abs() <= 2 {
+                    if object.2 {
+                        if let Some(goal) = cargo_goal {
+                            cargo += 1;
+                            score += good_value;
+                            if cargo >= goal {
+                                completed = true;
+                                score += lives.max(0) as u32 * 100;
+                            }
+                        } else if oxygen_mode {
+                            oxygen = (oxygen + 14).min(100);
+                            score += good_value;
+                        } else if combo_mode {
+                            score += good_value * combo;
+                            combo = (combo + 1).min(9);
+                        } else {
+                            score += good_value;
+                        }
+                        play_sound(state, "score");
+                    } else {
+                        lives -= 1;
+                        combo = 1;
+                        if oxygen_mode {
+                            oxygen = (oxygen - 20).max(0);
+                        }
+                        play_sound(state, "alert");
+                    }
+                } else {
+                    kept.push(object);
+                }
+            }
+            objects = kept;
+            if survival_score {
+                score += 1;
+            }
+            let status = if let Some(goal) = cargo_goal {
+                format!("Cargo {cargo}/{goal}")
+            } else if oxygen_mode {
+                format!("O2 {oxygen}")
+            } else if combo_mode {
+                format!("Combo x{combo}")
+            } else {
+                String::new()
+            };
+            draw_falling(
+                state,
+                name,
+                board_w,
+                board_h,
+                player,
+                player_sprite,
+                good_sprite,
+                bad_sprite,
+                &objects,
+                lives,
+                score,
+                &status,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, name, score);
+        let lines = if completed {
+            vec![
+                format!("Goal complete. Score: {score}"),
+                "Clean run bonus added for remaining lives.".to_string(),
+            ]
+        } else if oxygen_mode {
+            vec![
+                format!("Dive over. Score: {score}"),
+                "Pearls refill oxygen. Hazards and missed pearls drain it.".to_string(),
+            ]
+        } else if combo_mode {
+            vec![
+                format!("Run over. Score: {score}"),
+                "Catches build combo. Misses and hazards reset it.".to_string(),
+            ]
+        } else {
+            vec![
+                format!("Run over. Score: {score}"),
+                "Lives reached zero.".to_string(),
+            ]
+        };
+        if !wait_menu(state, name, &lines, true) {
+            return;
+        }
+    }
+}
+
+fn draw_falling(
+    state: &AppState,
+    name: &str,
+    board_w: i32,
+    board_h: i32,
+    player: (i32, i32),
+    player_sprite: &str,
+    good_sprite: Option<&str>,
+    bad_sprite: &str,
+    objects: &[(i32, f64, bool)],
+    lives: i32,
+    score: u32,
+    status: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    let status_text = if status.is_empty() {
+        String::new()
+    } else {
+        format!("   {status}")
+    };
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}{status_text}   WASD move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y, good) in objects {
+        let sprite = if good {
+            good_sprite.unwrap_or("*")
+        } else {
+            bad_sprite
+        };
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + x as usize,
+            sprite,
+            &theme,
+            if good { Role::Success } else { Role::Danger },
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize - player_sprite.len() / 2,
+        player_sprite,
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_racer(state: &mut AppState) {
+    if !require_size(state, 22, 54, "Racer") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(42, 17, 80, 40);
+        let lane_count = if board_w >= 70 {
+            6
+        } else if board_w >= 55 {
+            5
+        } else {
+            4
+        };
+        let lanes: Vec<i32> = (0..lane_count)
+            .map(|index| {
+                ((board_w as f64) * (index as f64 + 1.0) / (lane_count as f64 + 1.0)).round() as i32
+            })
+            .collect();
+        let mut player_lane = 1usize;
+        let mut obstacles: Vec<(usize, f64)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut last_spawn = Instant::now();
+        while lives > 0 {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') if player_lane > 0 => player_lane -= 1,
+                    Key::Right | Key::Char('d') if player_lane + 1 < lanes.len() => {
+                        player_lane += 1
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((520.0 / state.difficulty().speed) as u64)
+            {
+                obstacles.push((state.rng.usize(lanes.len()), 1.0));
+                last_spawn = Instant::now();
+            }
+            for obstacle in &mut obstacles {
+                obstacle.1 += 0.42 * state.difficulty().speed;
+            }
+            let mut kept = Vec::new();
+            for obstacle in obstacles.into_iter() {
+                let y = obstacle.1.round() as i32;
+                if y >= board_h - 2 {
+                    if obstacle.0 == player_lane {
+                        lives -= 1;
+                        play_sound(state, "alert");
+                    } else {
+                        score += 10;
+                    }
+                } else {
+                    kept.push(obstacle);
+                }
+            }
+            obstacles = kept;
+            draw_racer(
+                state,
+                board_w,
+                board_h,
+                &lanes,
+                player_lane,
+                &obstacles,
+                lives,
+                score,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, "Racer", score);
+        if !wait_menu(
+            state,
+            "Racer",
+            &[
+                format!("Road closed. Score: {score}"),
+                "Traffic got the better of you.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_racer(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    lanes: &[i32],
+    player_lane: usize,
+    obstacles: &[(usize, f64)],
+    lives: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "RACER", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   A/D lanes   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &lane_x in lanes {
+        for y in (0..board_h).step_by(2) {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + lane_x as usize,
+                "|",
+                &theme,
+                Role::Muted,
+                false,
+            );
+        }
+    }
+    for &(lane, y) in obstacles {
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + lanes[lane] as usize - 1,
+            "[X]",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + board_h as usize - 2,
+        left + lanes[player_lane] as usize - 1,
+        "/A\\",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_flappy(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Flappy Dash") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(56, 17, 132, 38);
+        let player_x = 8;
+        let mut player_y = board_h / 2;
+        let mut gates: Vec<(f64, i32)> =
+            vec![(board_w as f64 - 2.0, state.rng.range(4, board_h - 5))];
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        while lives > 0 {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => player_y = (player_y - 1).max(1),
+                    Key::Down | Key::Char('s') => player_y = (player_y + 1).min(board_h - 2),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            for gate in &mut gates {
+                gate.0 -= 0.58 * state.difficulty().speed;
+            }
+            if gates
+                .last()
+                .is_none_or(|gate| gate.0 < board_w as f64 - 18.0)
+            {
+                gates.push((board_w as f64 - 2.0, state.rng.range(4, board_h - 5)));
+            }
+            let mut kept = Vec::new();
+            for gate in gates.into_iter() {
+                let gx = gate.0.round() as i32;
+                if gx < 1 {
+                    score += 20;
+                    play_sound(state, "score");
+                } else {
+                    if (gx - player_x).abs() <= 1 && (player_y - gate.1).abs() > 2 {
+                        lives -= 1;
+                        play_sound(state, "alert");
+                    }
+                    kept.push(gate);
+                }
+            }
+            gates = kept;
+            draw_flappy(
+                state, board_w, board_h, player_x, player_y, &gates, lives, score,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, "Flappy Dash", score);
+        if !wait_menu(
+            state,
+            "Flappy Dash",
+            &[
+                format!("Crash. Score: {score}"),
+                "Direct up/down controls, no flap physics.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_flappy(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    player_x: i32,
+    player_y: i32,
+    gates: &[(f64, i32)],
+    lives: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "FLAPPY DASH", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   Up/Down move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, gap) in gates {
+        let gx = x.round() as i32;
+        if gx > 0 && gx < board_w {
+            for y in 1..board_h - 1 {
+                if (y - gap).abs() > 2 {
+                    put(
+                        &mut buf,
+                        top + y as usize,
+                        left + gx as usize,
+                        "|",
+                        &theme,
+                        Role::Danger,
+                        true,
+                    );
+                }
+            }
+        }
+    }
+    put(
+        &mut buf,
+        top + player_y as usize,
+        left + player_x as usize,
+        ">",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_side_scroll(
+    state: &mut AppState,
+    name: &str,
+    player_sprite: &str,
+    bad_sprite: &str,
+    good_sprite: Option<&str>,
+    help: &str,
+) {
+    if !require_size(state, 22, 64, name) {
+        return;
+    }
+    let drift_mode = name == "Neon Drift";
+    let solar_mode = name == "Solar Sailer";
+    let storm_mode = name == "Storm Surge";
+    let courier_goal = if name == "Orbital Courier" {
+        Some(match state.difficulty_index {
+            0 => 5,
+            1 => 7,
+            _ => 9,
+        })
+    } else {
+        None
+    };
+    loop {
+        let (board_w, board_h) = full_board(58, 17, 132, 38);
+        let mut player = (8, board_h / 2);
+        let mut objects: Vec<(f64, i32, bool)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut fuel = 80i32;
+        let mut heat = 0i32;
+        let mut charge = 40i32;
+        let mut deliveries = 0i32;
+        let mut drift_y = 0i32;
+        let mut current_clock = 0i32;
+        let mut completed = false;
+        let mut last_spawn = Instant::now();
+        while lives > 0 && fuel > 0 && !completed {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                if drift_mode {
+                    match key {
+                        Key::Up | Key::Char('w') => {
+                            drift_y = (drift_y - 1).max(-3);
+                            heat = (heat + 2).min(120);
+                        }
+                        Key::Down | Key::Char('s') => {
+                            drift_y = (drift_y + 1).min(3);
+                            heat = (heat + 2).min(120);
+                        }
+                        Key::Left | Key::Char('a') => player.0 = (player.0 - 1).max(2),
+                        Key::Right | Key::Char('d') => player.0 = (player.0 + 1).min(board_w / 2),
+                        _ if is_pause(key) => {
+                            if pause_screen(state).is_none() {
+                                return;
+                            }
+                        }
+                        _ if is_quit(key) => return,
+                        _ => {}
+                    }
+                } else {
+                    match key {
+                        Key::Up | Key::Char('w') => player.1 = (player.1 - 1).max(1),
+                        Key::Down | Key::Char('s') => player.1 = (player.1 + 1).min(board_h - 2),
+                        Key::Left | Key::Char('a') => player.0 = (player.0 - 1).max(2),
+                        Key::Right | Key::Char('d') => player.0 = (player.0 + 1).min(board_w / 2),
+                        _ if is_pause(key) => {
+                            if pause_screen(state).is_none() {
+                                return;
+                            }
+                        }
+                        _ if is_quit(key) => return,
+                        _ => {}
+                    }
+                }
+            }
+            current_clock += 1;
+            if drift_mode {
+                player.1 = (player.1 + drift_y).clamp(1, board_h - 2);
+                if drift_y != 0 {
+                    heat = (heat + drift_y.abs()).min(120);
+                }
+                if current_clock % 3 == 0 {
+                    drift_y -= drift_y.signum();
+                }
+                if heat >= 100 {
+                    lives -= 1;
+                    heat = 45;
+                    play_sound(state, "alert");
+                }
+            }
+            if storm_mode && current_clock % 6 == 0 {
+                let push = if (current_clock / 24) % 2 == 0 { -1 } else { 1 };
+                player.1 = (player.1 + push).clamp(1, board_h - 2);
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((430.0 / state.difficulty().speed) as u64)
+            {
+                let good = if good_sprite.is_none() {
+                    false
+                } else if courier_goal.is_some() || solar_mode {
+                    state.rng.chance(1, 3)
+                } else {
+                    state.rng.chance(1, 4)
+                };
+                objects.push((board_w as f64 - 2.0, state.rng.range(1, board_h - 2), good));
+                last_spawn = Instant::now();
+            }
+            for object in &mut objects {
+                let scroll_speed = if storm_mode { 0.76 } else { 0.64 };
+                object.0 -= scroll_speed * state.difficulty().speed;
+            }
+            let mut kept = Vec::new();
+            for object in objects.into_iter() {
+                let ox = object.0.round() as i32;
+                if ox < 1 {
+                    if !object.2 {
+                        score += if (object.1 - player.1).abs() <= 1 {
+                            10
+                        } else {
+                            5
+                        };
+                    }
+                    continue;
+                }
+                if (ox - player.0).abs() <= 2 && (object.1 - player.1).abs() <= 1 {
+                    if object.2 {
+                        if let Some(goal) = courier_goal {
+                            deliveries += 1;
+                            fuel = (fuel + 18).min(100);
+                            score += 30;
+                            if deliveries >= goal {
+                                completed = true;
+                                score += fuel.max(0) as u32 + lives.max(0) as u32 * 80;
+                            }
+                        } else if solar_mode {
+                            charge = (charge + 24).min(100);
+                            fuel = (fuel + 12).min(100);
+                            score += 15 + charge.max(0) as u32 / 10;
+                        } else if drift_mode {
+                            heat = (heat - 25).max(0);
+                            fuel = (fuel + 18).min(100);
+                            score += 20;
+                        } else {
+                            fuel = (fuel + 25).min(100);
+                            score += 15;
+                        }
+                        play_sound(state, "score");
+                    } else {
+                        lives -= 1;
+                        if drift_mode {
+                            heat = (heat + 25).min(120);
+                        }
+                        if solar_mode {
+                            charge = (charge - 30).max(0);
+                        }
+                        play_sound(state, "alert");
+                    }
+                } else {
+                    kept.push(object);
+                }
+            }
+            objects = kept;
+            score += if solar_mode && charge >= 100 { 2 } else { 1 };
+            if solar_mode && current_clock % 5 == 0 {
+                charge = (charge - 1).max(0);
+            }
+            fuel -= if good_sprite.is_some() && !(solar_mode && charge >= 85) {
+                1
+            } else {
+                0
+            };
+            let status = if drift_mode {
+                format!("Heat {heat}   Drift {drift_y}")
+            } else if solar_mode {
+                format!("Charge {charge}")
+            } else if let Some(goal) = courier_goal {
+                format!("Deliveries {deliveries}/{goal}")
+            } else if storm_mode {
+                let dir = if (current_clock / 24) % 2 == 0 {
+                    "up"
+                } else {
+                    "down"
+                };
+                format!("Current {dir}")
+            } else {
+                String::new()
+            };
+            draw_side_scroll(
+                state,
+                name,
+                board_w,
+                board_h,
+                player,
+                player_sprite,
+                bad_sprite,
+                good_sprite,
+                help,
+                &objects,
+                lives,
+                fuel,
+                score,
+                &status,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, name, score);
+        let lines = if completed {
+            vec![
+                format!("Route complete. Score: {score}"),
+                "Delivery bonus added for fuel and remaining lives.".to_string(),
+            ]
+        } else {
+            vec![
+                format!("Flight ended. Score: {score}"),
+                format!("Lives {lives}   Fuel {fuel}"),
+            ]
+        };
+        if !wait_menu(state, name, &lines, true) {
+            return;
+        }
+    }
+}
+
+fn draw_side_scroll(
+    state: &AppState,
+    name: &str,
+    board_w: i32,
+    board_h: i32,
+    player: (i32, i32),
+    player_sprite: &str,
+    bad_sprite: &str,
+    good_sprite: Option<&str>,
+    help: &str,
+    objects: &[(f64, i32, bool)],
+    lives: i32,
+    fuel: i32,
+    score: u32,
+    status: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    let status_text = if status.is_empty() {
+        String::new()
+    } else {
+        format!("   {status}")
+    };
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   Fuel {fuel}{status_text}   {help}   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y, good) in objects {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x.round().max(0.0) as usize,
+            if good {
+                good_sprite.unwrap_or("F")
+            } else {
+                bad_sprite
+            },
+            &theme,
+            if good { Role::Success } else { Role::Danger },
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize - player_sprite.len() / 2,
+        player_sprite,
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_frog(state: &mut AppState) {
+    if !require_size(state, 22, 58, "Frog Cross") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(50, 15, 118, 34);
+        let mut frog = (board_w / 2, board_h - 1);
+        let mut tick = 0i32;
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let lanes: Vec<i32> = (3..(board_h - 2)).step_by(2).collect();
+        while lives > 0 {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => frog.1 = (frog.1 - 1).max(0),
+                    Key::Down | Key::Char('s') => frog.1 = (frog.1 + 1).min(board_h - 1),
+                    Key::Left | Key::Char('a') => frog.0 = (frog.0 - 2).max(1),
+                    Key::Right | Key::Char('d') => frog.0 = (frog.0 + 2).min(board_w - 2),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            tick += 1;
+            let cars = frog_cars(board_w, &lanes, tick, state.difficulty_index);
+            if cars
+                .iter()
+                .any(|&(x, y)| y == frog.1 && frog.0 >= x && frog.0 < x + 4)
+            {
+                lives -= 1;
+                frog = (board_w / 2, board_h - 1);
+                play_sound(state, "alert");
+            }
+            if frog.1 == 0 {
+                score += 100;
+                frog = (board_w / 2, board_h - 1);
+                play_sound(state, "score");
+            }
+            draw_frog(state, board_w, board_h, frog, &cars, lives, score);
+            sleep_frame(frame, state.difficulty().tick_ms + 20);
+        }
+        record_score(state, "Frog Cross", score);
+        if !wait_menu(
+            state,
+            "Frog Cross",
+            &[
+                format!("Splash. Score: {score}"),
+                "Traffic does not yield.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn frog_cars(board_w: i32, lanes: &[i32], tick: i32, difficulty_index: usize) -> Vec<(i32, i32)> {
+    let mut cars = Vec::new();
+    for (i, &y) in lanes.iter().enumerate() {
+        let dir = if i % 2 == 0 { 1 } else { -1 };
+        let speed = 1 + difficulty_index as i32;
+        let spacing = 13 - difficulty_index as i32;
+        for n in 0..5 {
+            let raw = n * spacing + (tick / speed) * dir + i as i32 * 4;
+            let x = raw.rem_euclid(board_w + 8) - 4;
+            cars.push((x, y));
+        }
+    }
+    cars
+}
+
+fn draw_frog(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    frog: (i32, i32),
+    cars: &[(i32, i32)],
+    lives: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "FROG CROSS", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   WASD hop   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    put(
+        &mut buf,
+        top,
+        left + 1,
+        &"~".repeat((board_w - 2) as usize),
+        &theme,
+        Role::Success,
+        false,
+    );
+    for &(x, y) in cars {
+        if x > 0 && x < board_w - 3 {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + x as usize,
+                "####",
+                &theme,
+                Role::Danger,
+                true,
+            );
+        }
+    }
+    put(
+        &mut buf,
+        top + frog.1 as usize,
+        left + frog.0 as usize,
+        "@",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_target(state: &mut AppState, name: &str, whack: bool) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(52, 16, 132, 36);
+        let mut cursor = (board_w / 2, board_h / 2);
+        let mut target = (
+            state.rng.range(2, board_w - 3),
+            state.rng.range(2, board_h - 3),
+        );
+        let mut score = 0u32;
+        let mut misses = 0u32;
+        let duration = match state.difficulty_index {
+            0 => 45,
+            1 => 35,
+            _ => 25,
+        };
+        let mut end_at = Instant::now() + Duration::from_secs(duration);
+        let mut next_target =
+            Instant::now() + Duration::from_millis(if whack { 1200 } else { 5000 });
+        while Instant::now() < end_at {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => cursor.1 = (cursor.1 - 1).max(1),
+                    Key::Down | Key::Char('s') => cursor.1 = (cursor.1 + 1).min(board_h - 2),
+                    Key::Left | Key::Char('a') => cursor.0 = (cursor.0 - 2).max(1),
+                    Key::Right | Key::Char('d') => cursor.0 = (cursor.0 + 2).min(board_w - 2),
+                    Key::Space => {
+                        if (cursor.0 - target.0).abs() <= if whack { 1 } else { 2 }
+                            && (cursor.1 - target.1).abs() <= 1
+                        {
+                            score += if whack { 20 } else { 25 };
+                            target = (
+                                state.rng.range(2, board_w - 3),
+                                state.rng.range(2, board_h - 3),
+                            );
+                            next_target = Instant::now()
+                                + Duration::from_millis(if whack { 900 } else { 5000 });
+                            play_sound(state, "score");
+                        } else {
+                            misses += 1;
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if let Some(paused) = pause_screen(state) {
+                            end_at += paused;
+                            next_target += paused;
+                        } else {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if Instant::now() >= next_target {
+                target = (
+                    state.rng.range(2, board_w - 3),
+                    state.rng.range(2, board_h - 3),
+                );
+                next_target =
+                    Instant::now() + Duration::from_millis(if whack { 900 } else { 5000 });
+            }
+            let remaining = end_at.saturating_duration_since(Instant::now()).as_secs();
+            draw_target(
+                state, name, board_w, board_h, cursor, target, score, misses, remaining, whack,
+            );
+            sleep_frame(frame, 45);
+        }
+        let final_score = score.saturating_sub(misses * 5);
+        record_score(state, name, final_score);
+        if !wait_menu(
+            state,
+            name,
+            &[
+                format!("Time. Score: {final_score}"),
+                format!("Misses: {misses}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_target(
+    state: &AppState,
+    name: &str,
+    board_w: i32,
+    board_h: i32,
+    cursor: (i32, i32),
+    target: (i32, i32),
+    score: u32,
+    misses: u32,
+    remaining: u64,
+    whack: bool,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "Score {score}   Misses {misses}   Time {remaining}s   Space {}   Q menu",
+            if whack { "whack" } else { "fire" }
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    if whack {
+        for y in [3, 6, 9, 12] {
+            for x in (6..board_w - 4).step_by(10) {
+                put(
+                    &mut buf,
+                    top + y as usize,
+                    left + x as usize - 1,
+                    "(_)",
+                    &theme,
+                    Role::Muted,
+                    false,
+                );
+            }
+        }
+        put(
+            &mut buf,
+            top + target.1 as usize,
+            left + target.0 as usize - 1,
+            "\\M/",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    } else {
+        put(
+            &mut buf,
+            top + target.1 as usize,
+            left + target.0 as usize - 1,
+            "(*)",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + cursor.1 as usize,
+        left + cursor.0 as usize,
+        "+",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_pixel_pop(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Pixel Pop") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(52, 16, 100, 34);
+        let grid_w = (board_w / 2).max(18);
+        let grid_h = board_h;
+        let colors = match state.difficulty_index {
+            0 => 4,
+            1 => 5,
+            _ => 6,
+        };
+        let mut grid = vec![vec![0u8; grid_w as usize]; grid_h as usize];
+        for y in 0..grid_h as usize {
+            for x in 0..grid_w as usize {
+                grid[y][x] = state.rng.usize(colors) as u8;
+            }
+        }
+        let mut cursor = (grid_w / 2, grid_h / 2);
+        let mut score = 0u32;
+        let mut misses = 0u32;
+        let duration = match state.difficulty_index {
+            0 => 60,
+            1 => 45,
+            _ => 35,
+        };
+        let mut end_at = Instant::now() + Duration::from_secs(duration);
+        while Instant::now() < end_at {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => cursor.1 = (cursor.1 - 1).max(0),
+                    Key::Down | Key::Char('s') => cursor.1 = (cursor.1 + 1).min(grid_h - 1),
+                    Key::Left | Key::Char('a') => cursor.0 = (cursor.0 - 1).max(0),
+                    Key::Right | Key::Char('d') => cursor.0 = (cursor.0 + 1).min(grid_w - 1),
+                    Key::Space | Key::Enter => {
+                        let target = grid[cursor.1 as usize][cursor.0 as usize];
+                        let mut queue = VecDeque::new();
+                        let mut cluster = HashSet::new();
+                        queue.push_back(cursor);
+                        cluster.insert(cursor);
+                        while let Some((x, y)) = queue.pop_front() {
+                            for next in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)] {
+                                if next.0 >= 0
+                                    && next.0 < grid_w
+                                    && next.1 >= 0
+                                    && next.1 < grid_h
+                                    && grid[next.1 as usize][next.0 as usize] == target
+                                    && cluster.insert(next)
+                                {
+                                    queue.push_back(next);
+                                }
+                            }
+                        }
+                        if cluster.len() >= 2 {
+                            let popped = cluster.len() as u32;
+                            score += popped * popped;
+                            for &(x, y) in &cluster {
+                                grid[y as usize][x as usize] = u8::MAX;
+                            }
+                            for x in 0..grid_w as usize {
+                                let mut kept = Vec::new();
+                                for y in (0..grid_h as usize).rev() {
+                                    if grid[y][x] != u8::MAX {
+                                        kept.push(grid[y][x]);
+                                    }
+                                }
+                                let mut write = grid_h as usize;
+                                for value in kept {
+                                    write -= 1;
+                                    grid[write][x] = value;
+                                }
+                                while write > 0 {
+                                    write -= 1;
+                                    grid[write][x] = state.rng.usize(colors) as u8;
+                                }
+                            }
+                            play_sound(state, "score");
+                        } else {
+                            misses += 1;
+                            score = score.saturating_sub(5);
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if let Some(paused) = pause_screen(state) {
+                            end_at += paused;
+                        } else {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            let remaining = end_at.saturating_duration_since(Instant::now()).as_secs();
+            draw_pixel_pop(
+                state, board_w, board_h, grid_w, grid_h, &grid, cursor, score, misses, remaining,
+            );
+            sleep_frame(frame, 45);
+        }
+        let final_score = score.saturating_sub(misses * 3);
+        record_score(state, "Pixel Pop", final_score);
+        if !wait_menu(
+            state,
+            "Pixel Pop",
+            &[
+                format!("Time. Score: {final_score}"),
+                "Pop connected color clusters. Bigger clusters pay more.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_pixel_pop(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    grid_w: i32,
+    grid_h: i32,
+    grid: &[Vec<u8>],
+    cursor: (i32, i32),
+    score: u32,
+    misses: u32,
+    remaining: u64,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "PIXEL POP", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "Score {score}   Misses {misses}   Time {remaining}s   Space pop cluster   Q menu"
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for y in 0..grid_h {
+        for x in 0..grid_w {
+            let color = grid[y as usize][x as usize];
+            let role = match color {
+                0 => Role::Success,
+                1 => Role::Danger,
+                2 => Role::Accent,
+                3 => Role::Secondary,
+                4 => Role::Highlight,
+                _ => Role::Muted,
+            };
+            put(
+                &mut buf,
+                top + y as usize,
+                left + (x * 2) as usize,
+                "##",
+                &theme,
+                role,
+                true,
+            );
+        }
+    }
+    put(
+        &mut buf,
+        top + cursor.1 as usize,
+        left + (cursor.0 * 2) as usize,
+        "<>",
+        &theme,
+        Role::Title,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_bug_hunt(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Bug Hunt") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(52, 16, 132, 36);
+        let mut cursor = (board_w / 2, board_h / 2);
+        let mut bugs: Vec<(i32, i32)> = random_points(
+            state,
+            board_w,
+            board_h,
+            match state.difficulty_index {
+                0 => 5,
+                1 => 7,
+                _ => 9,
+            },
+        )
+        .into_iter()
+        .collect();
+        let mut score = 0u32;
+        let mut misses = 0u32;
+        let mut lives = state.difficulty().lives;
+        let max_swarm = match state.difficulty_index {
+            0 => 18,
+            1 => 15,
+            _ => 12,
+        };
+        let duration = match state.difficulty_index {
+            0 => 60,
+            1 => 45,
+            _ => 35,
+        };
+        let mut end_at = Instant::now() + Duration::from_secs(duration);
+        let mut last_move = Instant::now();
+        let mut last_spawn = Instant::now();
+        while lives > 0 && Instant::now() < end_at {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => cursor.1 = (cursor.1 - 1).max(1),
+                    Key::Down | Key::Char('s') => cursor.1 = (cursor.1 + 1).min(board_h - 2),
+                    Key::Left | Key::Char('a') => cursor.0 = (cursor.0 - 2).max(1),
+                    Key::Right | Key::Char('d') => cursor.0 = (cursor.0 + 2).min(board_w - 2),
+                    Key::Space | Key::Enter => {
+                        if let Some(index) = bugs.iter().position(|bug| {
+                            (bug.0 - cursor.0).abs() <= 1 && (bug.1 - cursor.1).abs() <= 1
+                        }) {
+                            bugs.remove(index);
+                            score += 25;
+                            play_sound(state, "score");
+                        } else {
+                            misses += 1;
+                            score = score.saturating_sub(5);
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if let Some(paused) = pause_screen(state) {
+                            end_at += paused;
+                            last_move += paused;
+                            last_spawn += paused;
+                        } else {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_move.elapsed()
+                >= Duration::from_millis((260.0 / state.difficulty().speed) as u64)
+            {
+                for bug in &mut bugs {
+                    match state.rng.usize(5) {
+                        0 => bug.0 = (bug.0 + 1).min(board_w - 2),
+                        1 => bug.0 = (bug.0 - 1).max(1),
+                        2 => bug.1 = (bug.1 + 1).min(board_h - 2),
+                        3 => bug.1 = (bug.1 - 1).max(1),
+                        _ => {}
+                    }
+                }
+                last_move = Instant::now();
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((1800.0 / state.difficulty().speed) as u64)
+            {
+                bugs.push((
+                    state.rng.range(2, board_w - 3),
+                    state.rng.range(2, board_h - 3),
+                ));
+                last_spawn = Instant::now();
+            }
+            if bugs.len() > max_swarm {
+                lives -= 1;
+                bugs.truncate(max_swarm / 2);
+                play_sound(state, "alert");
+            }
+            let remaining = end_at.saturating_duration_since(Instant::now()).as_secs();
+            draw_bug_hunt(
+                state, board_w, board_h, cursor, &bugs, score, misses, lives, remaining,
+            );
+            sleep_frame(frame, 45);
+        }
+        let final_score = score.saturating_sub(misses * 3);
+        record_score(state, "Bug Hunt", final_score);
+        if !wait_menu(
+            state,
+            "Bug Hunt",
+            &[
+                format!("Extermination report. Score: {final_score}"),
+                "Shoot crawling bugs before the swarm overruns the board.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_bug_hunt(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    cursor: (i32, i32),
+    bugs: &[(i32, i32)],
+    score: u32,
+    misses: u32,
+    lives: i32,
+    remaining: u64,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "BUG HUNT", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   Bugs {}   Misses {misses}   Time {remaining}s   Space shoot   Q menu", bugs.len()),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in bugs {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "b",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + cursor.1 as usize,
+        left + cursor.0 as usize,
+        "+",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_coin(state: &mut AppState) {
+    if !require_size(state, 22, 58, "Coin Collector") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(48, 16, 118, 36);
+        let mut player = (board_w / 2, board_h / 2);
+        let mut coins = random_points(state, board_w, board_h, 7);
+        let traps = random_points(
+            state,
+            board_w,
+            board_h,
+            match state.difficulty_index {
+                0 => 5,
+                1 => 7,
+                _ => 10,
+            },
+        );
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        while lives > 0 && !coins.is_empty() {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Up | Key::Char('w') => player.1 = (player.1 - 1).max(1),
+                    Key::Down | Key::Char('s') => player.1 = (player.1 + 1).min(board_h - 2),
+                    Key::Left | Key::Char('a') => player.0 = (player.0 - 1).max(1),
+                    Key::Right | Key::Char('d') => player.0 = (player.0 + 1).min(board_w - 2),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if coins.remove(&player) {
+                score += 25;
+                play_sound(state, "score");
+            }
+            if traps.contains(&player) {
+                lives -= 1;
+                player = (board_w / 2, board_h / 2);
+                play_sound(state, "alert");
+            }
+            draw_grid_collect(
+                state,
+                "COIN COLLECTOR",
+                board_w,
+                board_h,
+                player,
+                &coins,
+                &traps,
+                "$",
+                "x",
+                lives,
+                score,
+            );
+            sleep_frame(frame, 70);
+        }
+        record_score(state, "Coin Collector", score);
+        if !wait_menu(
+            state,
+            "Coin Collector",
+            &[
+                format!("Run over. Score: {score}"),
+                "Coins kept clinking.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn random_points(state: &mut AppState, w: i32, h: i32, count: usize) -> HashSet<(i32, i32)> {
+    let mut points = HashSet::new();
+    while points.len() < count {
+        points.insert((state.rng.range(2, w - 3), state.rng.range(2, h - 3)));
+    }
+    points
+}
+
+fn draw_grid_collect(
+    state: &AppState,
+    title: &str,
+    board_w: i32,
+    board_h: i32,
+    player: (i32, i32),
+    good: &HashSet<(i32, i32)>,
+    bad: &HashSet<(i32, i32)>,
+    good_sprite: &str,
+    bad_sprite: &str,
+    lives: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, title, &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   WASD move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in good {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            good_sprite,
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    for &(x, y) in bad {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            bad_sprite,
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize,
+        "@",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_minefield(state: &mut AppState) {
+    grid_exit_game(state, "Minefield", true, false);
+}
+
+fn game_maze(state: &mut AppState) {
+    grid_exit_game(state, "Maze Runner", false, false);
+}
+
+fn game_circuit(state: &mut AppState) {
+    grid_exit_game(state, "Circuit Trace", false, true);
+}
+
+fn grid_exit_game(state: &mut AppState, name: &str, mines_mode: bool, ordered_nodes: bool) {
+    if !require_size(state, 22, 62, name) {
+        return;
+    }
+    let trap_mode = name == "Trap Runner";
+    let vault_mode = name == "Vault Escape";
+    let ice_mode = name == "Ice Slide";
+    let crystal_mode = name == "Crystal Cavern";
+    loop {
+        let (w, h) = full_board(48, 16, 118, 36);
+        let mut player = (1, h - 2);
+        let goal = (w - 2, 1);
+        let walls = if mines_mode {
+            HashSet::new()
+        } else {
+            make_maze(state, w, h, player, goal)
+        };
+        let mut mines = if mines_mode {
+            random_points(
+                state,
+                w,
+                h,
+                match state.difficulty_index {
+                    0 => 14,
+                    1 => 22,
+                    _ => 32,
+                },
+            )
+        } else {
+            HashSet::new()
+        };
+        let mut nodes = Vec::new();
+        if ordered_nodes {
+            for i in 0..5 {
+                loop {
+                    let point = (state.rng.range(4, w - 5), state.rng.range(3, h - 4));
+                    if !walls.contains(&point) && point != player && point != goal {
+                        nodes.push((point.0, point.1, i + 1));
+                        break;
+                    }
+                }
+            }
+        }
+        let mut items = HashSet::new();
+        let wanted_items = if vault_mode {
+            3
+        } else if crystal_mode {
+            match state.difficulty_index {
+                0 => 6,
+                1 => 8,
+                _ => 10,
+            }
+        } else {
+            0
+        };
+        while items.len() < wanted_items {
+            let point = (state.rng.range(2, w - 3), state.rng.range(2, h - 3));
+            if !walls.contains(&point) && point != player && point != goal {
+                items.insert(point);
+            }
+        }
+        let item_sprite = if vault_mode {
+            "K"
+        } else if crystal_mode {
+            "*"
+        } else {
+            ""
+        };
+        let mut next_node = 1;
+        let mut steps = 0u32;
+        let mut bonus = 0u32;
+        let mut lives = if trap_mode {
+            state.difficulty().lives
+        } else {
+            1
+        };
+        let mut status = "Find the exit.".to_string();
+        let mut won = false;
+        let mut lost = false;
+        while !won && !lost {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                if is_pause(key) {
+                    if pause_screen(state).is_none() {
+                        return;
+                    }
+                    continue;
+                }
+                let delta = match key {
+                    Key::Up | Key::Char('w') => (0, -1),
+                    Key::Down | Key::Char('s') => (0, 1),
+                    Key::Left | Key::Char('a') => (-1, 0),
+                    Key::Right | Key::Char('d') => (1, 0),
+                    _ if is_quit(key) => return,
+                    _ => (0, 0),
+                };
+                if delta != (0, 0) {
+                    if ice_mode {
+                        let mut moved = false;
+                        loop {
+                            let next = (player.0 + delta.0, player.1 + delta.1);
+                            if next.0 <= 0
+                                || next.0 >= w - 1
+                                || next.1 <= 0
+                                || next.1 >= h - 1
+                                || walls.contains(&next)
+                            {
+                                break;
+                            }
+                            player = next;
+                            steps += 1;
+                            moved = true;
+                        }
+                        if moved {
+                            play_sound(state, "wall");
+                        }
+                    } else {
+                        let next = (player.0 + delta.0, player.1 + delta.1);
+                        if next.0 > 0
+                            && next.0 < w - 1
+                            && next.1 > 0
+                            && next.1 < h - 1
+                            && !walls.contains(&next)
+                        {
+                            player = next;
+                            steps += 1;
+                        }
+                    }
+                }
+            }
+            if trap_mode {
+                let mut moved_traps = HashSet::new();
+                for &trap in &mines {
+                    let choices = [
+                        (trap.0 + 1, trap.1),
+                        (trap.0 - 1, trap.1),
+                        (trap.0, trap.1 + 1),
+                        (trap.0, trap.1 - 1),
+                        trap,
+                    ];
+                    let next = choices[state.rng.usize(choices.len())];
+                    if next.0 > 0 && next.0 < w - 1 && next.1 > 0 && next.1 < h - 1 && next != goal
+                    {
+                        moved_traps.insert(next);
+                    } else {
+                        moved_traps.insert(trap);
+                    }
+                }
+                mines = moved_traps;
+            }
+            if items.remove(&player) {
+                bonus += if vault_mode { 75 } else { 40 };
+                play_sound(state, "score");
+            }
+            if mines.contains(&player) {
+                if trap_mode {
+                    lives -= 1;
+                    if lives <= 0 {
+                        lost = true;
+                        status = "Caught by the traps.".to_string();
+                    } else {
+                        player = (1, h - 2);
+                        status = format!("Trap hit. Lives {lives}.");
+                    }
+                } else {
+                    lost = true;
+                    status = "Boom. Hidden mine.".to_string();
+                }
+                play_sound(state, "alert");
+            }
+            if ordered_nodes {
+                if let Some(pos) = nodes
+                    .iter()
+                    .position(|&(x, y, n)| (x, y) == player && n == next_node)
+                {
+                    nodes.remove(pos);
+                    next_node += 1;
+                    play_sound(state, "score");
+                }
+                status = format!("Trace node {next_node}, then exit.");
+                if player == goal && next_node <= 5 {
+                    status = "Need all nodes first.".to_string();
+                }
+            } else if mines_mode && !lost {
+                let nearby = mines
+                    .iter()
+                    .filter(|&&(x, y)| (x - player.0).abs() <= 1 && (y - player.1).abs() <= 1)
+                    .count();
+                if trap_mode {
+                    status = format!("Lives {lives}. Moving traps nearby: {nearby}.");
+                } else {
+                    status = format!("Scanner: {nearby} mine(s) nearby.");
+                }
+            } else if vault_mode {
+                status = format!("Keys left: {}. Unlock the exit.", items.len());
+                if player == goal && !items.is_empty() {
+                    status = "Need every key first.".to_string();
+                }
+            } else if crystal_mode {
+                status = format!("Crystals left: {}.", items.len());
+                if player == goal && !items.is_empty() {
+                    status = "Collect every crystal first.".to_string();
+                }
+            } else if ice_mode {
+                status = "Sliding. Pick a direction and ride it out.".to_string();
+            }
+            if player == goal
+                && (!ordered_nodes || next_node > 5)
+                && (!vault_mode || items.is_empty())
+                && (!crystal_mode || items.is_empty())
+            {
+                won = true;
+                play_sound(state, "score");
+            }
+            draw_grid_exit(
+                state,
+                name,
+                w,
+                h,
+                player,
+                goal,
+                &walls,
+                &mines,
+                &nodes,
+                &items,
+                item_sprite,
+                ordered_nodes,
+                steps,
+                &status,
+            );
+            sleep_frame(frame, 70);
+        }
+        let score = if won {
+            1000u32.saturating_sub(steps * 3) + bonus
+        } else {
+            steps + bonus
+        };
+        record_score(state, name, score);
+        if !wait_menu(state, name, &[status, format!("Score: {score}")], true) {
+            return;
+        }
+    }
+}
+
+fn make_maze(
+    state: &mut AppState,
+    w: i32,
+    h: i32,
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> HashSet<(i32, i32)> {
+    for _ in 0..200 {
+        let mut walls = HashSet::new();
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                if (x, y) != start
+                    && (x, y) != goal
+                    && state.rng.chance(
+                        match state.difficulty_index {
+                            0 => 12,
+                            1 => 17,
+                            _ => 22,
+                        },
+                        100,
+                    )
+                {
+                    walls.insert((x, y));
+                }
+            }
+        }
+        if path_exists(w, h, start, goal, &walls) {
+            return walls;
+        }
+    }
+    HashSet::new()
+}
+
+fn path_exists(
+    w: i32,
+    h: i32,
+    start: (i32, i32),
+    goal: (i32, i32),
+    walls: &HashSet<(i32, i32)>,
+) -> bool {
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+    queue.push_back(start);
+    seen.insert(start);
+    while let Some(p) = queue.pop_front() {
+        if p == goal {
+            return true;
+        }
+        for n in [
+            (p.0 + 1, p.1),
+            (p.0 - 1, p.1),
+            (p.0, p.1 + 1),
+            (p.0, p.1 - 1),
+        ] {
+            if n.0 > 0
+                && n.0 < w - 1
+                && n.1 > 0
+                && n.1 < h - 1
+                && !walls.contains(&n)
+                && seen.insert(n)
+            {
+                queue.push_back(n);
+            }
+        }
+    }
+    false
+}
+
+fn draw_grid_exit(
+    state: &AppState,
+    name: &str,
+    w: i32,
+    h: i32,
+    player: (i32, i32),
+    goal: (i32, i32),
+    walls: &HashSet<(i32, i32)>,
+    mines: &HashSet<(i32, i32)>,
+    nodes: &[(i32, i32, i32)],
+    items: &HashSet<(i32, i32)>,
+    item_sprite: &str,
+    ordered_nodes: bool,
+    steps: u32,
+    status: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - h as usize / 2 + 1;
+    let left = cols / 2 - w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        &name.to_ascii_uppercase(),
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Steps {steps}   {status}   WASD move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        h as usize + 2,
+        w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in walls {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "#",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    if name == "Trap Runner" {
+        for &(x, y) in mines {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + x as usize,
+                "^",
+                &theme,
+                Role::Danger,
+                true,
+            );
+        }
+    }
+    if !item_sprite.is_empty() {
+        for &(x, y) in items {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + x as usize,
+                item_sprite,
+                &theme,
+                Role::Success,
+                true,
+            );
+        }
+    }
+    if ordered_nodes {
+        for &(x, y, n) in nodes {
+            put(
+                &mut buf,
+                top + y as usize,
+                left + x as usize,
+                &n.to_string(),
+                &theme,
+                Role::Success,
+                true,
+            );
+        }
+    } else if mines.is_empty() {
+        put(
+            &mut buf,
+            top + goal.1 as usize,
+            left + goal.0 as usize,
+            "G",
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    if !mines.is_empty() {
+        put(
+            &mut buf,
+            top + goal.1 as usize,
+            left + goal.0 as usize,
+            "E",
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize,
+        "@",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_byte_blaster(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Byte Blaster") {
+        return;
+    }
+    let keys = ['a', 's', 'd', 'f', 'j', 'k', 'l', 'w', 'e', 'r', 'u', 'i'];
+    loop {
+        let (board_w, board_h) = full_board(56, 17, 132, 38);
+        let mut bytes: Vec<(i32, f64, char)> = Vec::new();
+        let mut score = 0u32;
+        let mut streak = 0u32;
+        let mut lives = state.difficulty().lives;
+        let mut last_spawn = Instant::now();
+        while lives > 0 {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Char(ch) if ch != 'q' => {
+                        let mut hit_index = None;
+                        let mut lowest_y = -1.0;
+                        for (index, byte) in bytes.iter().enumerate() {
+                            if byte.2 == ch && byte.1 > lowest_y {
+                                hit_index = Some(index);
+                                lowest_y = byte.1;
+                            }
+                        }
+                        if let Some(index) = hit_index {
+                            bytes.remove(index);
+                            score += 20 + streak.min(12) * 2;
+                            streak += 1;
+                            play_sound(state, "score");
+                        } else {
+                            streak = 0;
+                            score = score.saturating_sub(2);
+                            play_sound(state, "wall");
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((520.0 / state.difficulty().speed) as u64)
+            {
+                let ch = keys[state.rng.usize(keys.len())];
+                bytes.push((state.rng.range(2, board_w - 3), 1.0, ch));
+                if state.difficulty_index == 2 && state.rng.chance(1, 4) {
+                    let ch = keys[state.rng.usize(keys.len())];
+                    bytes.push((state.rng.range(2, board_w - 3), 1.0, ch));
+                }
+                last_spawn = Instant::now();
+            }
+            for byte in &mut bytes {
+                byte.1 += 0.20 * state.difficulty().speed;
+            }
+            let mut kept = Vec::new();
+            for byte in bytes.into_iter() {
+                if byte.1.round() as i32 >= board_h - 1 {
+                    lives -= 1;
+                    streak = 0;
+                    play_sound(state, "alert");
+                } else {
+                    kept.push(byte);
+                }
+            }
+            bytes = kept;
+            draw_byte_blaster(state, board_w, board_h, &bytes, lives, score, streak);
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, "Byte Blaster", score);
+        if !wait_menu(
+            state,
+            "Byte Blaster",
+            &[
+                format!("System flooded. Score: {score}"),
+                "Type matching letters before they hit the bottom.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_byte_blaster(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    bytes: &[(i32, f64, char)],
+    lives: i32,
+    score: u32,
+    streak: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "BYTE BLASTER", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "Score {score}   Lives {lives}   Streak {streak}   Type matching letters   Q menu"
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    put(
+        &mut buf,
+        top + board_h as usize - 1,
+        left,
+        &"=".repeat(board_w as usize),
+        &theme,
+        Role::Danger,
+        false,
+    );
+    for &(x, y, ch) in bytes {
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + x as usize,
+            &ch.to_string(),
+            &theme,
+            if y > (board_h - 5) as f64 {
+                Role::Danger
+            } else {
+                Role::Success
+            },
+            true,
+        );
+    }
+    flush(&buf);
+}
+
+fn game_dungeon(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Dungeon Crawl") {
+        return;
+    }
+    loop {
+        let (w, h) = full_board(48, 16, 118, 36);
+        let mut player = (2, h - 2);
+        let exit = (w - 3, 1);
+        let walls = make_maze(state, w, h, player, exit);
+        let mut treasure = random_points(state, w, h, 6);
+        let mut enemies: Vec<(i32, i32)> = random_points(
+            state,
+            w,
+            h,
+            match state.difficulty_index {
+                0 => 3,
+                1 => 4,
+                _ => 5,
+            },
+        )
+        .into_iter()
+        .collect();
+        let mut score = 0u32;
+        let mut alive = true;
+        let mut won = false;
+        while alive && !won {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                let mut next = player;
+                match key {
+                    Key::Up | Key::Char('w') => next.1 -= 1,
+                    Key::Down | Key::Char('s') => next.1 += 1,
+                    Key::Left | Key::Char('a') => next.0 -= 1,
+                    Key::Right | Key::Char('d') => next.0 += 1,
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+                if next.0 > 0
+                    && next.0 < w - 1
+                    && next.1 > 0
+                    && next.1 < h - 1
+                    && !walls.contains(&next)
+                {
+                    player = next;
+                }
+            }
+            if treasure.remove(&player) {
+                score += 100;
+                play_sound(state, "score");
+            }
+            for enemy in &mut enemies {
+                let choices = [
+                    (enemy.0 + 1, enemy.1),
+                    (enemy.0 - 1, enemy.1),
+                    (enemy.0, enemy.1 + 1),
+                    (enemy.0, enemy.1 - 1),
+                ];
+                let next = choices[state.rng.usize(choices.len())];
+                if next.0 > 0
+                    && next.0 < w - 1
+                    && next.1 > 0
+                    && next.1 < h - 1
+                    && !walls.contains(&next)
+                {
+                    *enemy = next;
+                }
+            }
+            if enemies.contains(&player) {
+                alive = false;
+                play_sound(state, "alert");
+            }
+            if player == exit {
+                won = true;
+                score += 250;
+            }
+            draw_dungeon(
+                state, w, h, player, exit, &walls, &treasure, &enemies, score,
+            );
+            sleep_frame(frame, 120);
+        }
+        record_score(state, "Dungeon Crawl", score);
+        let result = if won {
+            "You reached the stairs."
+        } else {
+            "A dungeon enemy caught you."
+        };
+        if !wait_menu(
+            state,
+            "Dungeon Crawl",
+            &[result.to_string(), format!("Score: {score}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_dungeon(
+    state: &AppState,
+    w: i32,
+    h: i32,
+    player: (i32, i32),
+    exit: (i32, i32),
+    walls: &HashSet<(i32, i32)>,
+    treasure: &HashSet<(i32, i32)>,
+    enemies: &[(i32, i32)],
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - h as usize / 2 + 1;
+    let left = cols / 2 - w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        "DUNGEON CRAWL",
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Grab $   Reach >   WASD move   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        h as usize + 2,
+        w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in walls {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "#",
+            &theme,
+            Role::Muted,
+            false,
+        );
+    }
+    for &(x, y) in treasure {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "$",
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    for &(x, y) in enemies {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "e",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + exit.1 as usize,
+        left + exit.0 as usize,
+        ">",
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize,
+        "@",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_laser(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Laser Drill") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(52, 17, 132, 38);
+        let mut player_x = board_w / 2;
+        let mut shots: Vec<(i32, i32)> = Vec::new();
+        let mut blocks: Vec<(i32, f64)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut last_spawn = Instant::now();
+        while lives > 0 {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => player_x = (player_x - 2).max(2),
+                    Key::Right | Key::Char('d') => player_x = (player_x + 2).min(board_w - 3),
+                    Key::Space => {
+                        shots.push((player_x, board_h - 3));
+                        play_sound(state, "paddle");
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((440.0 / state.difficulty().speed) as u64)
+            {
+                blocks.push((state.rng.range(2, board_w - 3), 1.0));
+                last_spawn = Instant::now();
+            }
+            for shot in &mut shots {
+                shot.1 -= 1;
+            }
+            for block in &mut blocks {
+                block.1 += 0.23 * state.difficulty().speed;
+            }
+            let mut hit_blocks = HashSet::new();
+            let mut hit_shots = HashSet::new();
+            for (si, shot) in shots.iter().enumerate() {
+                for (bi, block) in blocks.iter().enumerate() {
+                    if (shot.0 - block.0).abs() <= 1 && (shot.1 - block.1.round() as i32).abs() <= 1
+                    {
+                        hit_shots.insert(si);
+                        hit_blocks.insert(bi);
+                    }
+                }
+            }
+            if !hit_blocks.is_empty() {
+                score += hit_blocks.len() as u32 * 20;
+                play_sound(state, "score");
+            }
+            shots = shots
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, shot)| (shot.1 > 0 && !hit_shots.contains(&i)).then_some(shot))
+                .collect();
+            let mut kept = Vec::new();
+            for (i, block) in blocks.into_iter().enumerate() {
+                if hit_blocks.contains(&i) {
+                    continue;
+                }
+                if block.1 >= board_h as f64 - 2.0 {
+                    lives -= 1;
+                    play_sound(state, "alert");
+                } else {
+                    kept.push(block);
+                }
+            }
+            blocks = kept;
+            draw_laser(
+                state, board_w, board_h, player_x, &shots, &blocks, lives, score,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, "Laser Drill", score);
+        if !wait_menu(
+            state,
+            "Laser Drill",
+            &[
+                format!("Drill overheated. Score: {score}"),
+                "Blocks reached the floor.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_laser(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    player_x: i32,
+    shots: &[(i32, i32)],
+    blocks: &[(i32, f64)],
+    lives: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "LASER DRILL", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   A/D move   Space fire   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in shots {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "|",
+            &theme,
+            Role::Success,
+            true,
+        );
+    }
+    for &(x, y) in blocks {
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + x as usize - 1,
+            "[]",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    put(
+        &mut buf,
+        top + board_h as usize - 2,
+        left + player_x as usize - 1,
+        "/A\\",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    flush(&buf);
+}
+
+fn game_simon(state: &mut AppState) {
+    let keys = [('w', "UP"), ('a', "LEFT"), ('s', "DOWN"), ('d', "RIGHT")];
+    loop {
+        let mut sequence: Vec<usize> = Vec::new();
+        let mut score = 0u32;
+        let mut round_no = 0u32;
+        loop {
+            sequence.push(state.rng.usize(keys.len()));
+            round_no += 1;
+            for &index in &sequence {
+                draw_prompt(
+                    state,
+                    "SIMON SAYS",
+                    &format!("Round {round_no}"),
+                    keys[index].1,
+                    "Watch the sequence.",
+                );
+                thread::sleep(Duration::from_millis(match state.difficulty_index {
+                    0 => 760,
+                    1 => 560,
+                    _ => 390,
+                }));
+                draw_prompt(state, "SIMON SAYS", "", "", "");
+                thread::sleep(Duration::from_millis(140));
+            }
+            draw_prompt(
+                state,
+                "SIMON SAYS",
+                "Repeat it with W/A/S/D. Q quits.",
+                "",
+                "",
+            );
+            for &index in &sequence {
+                let expected = keys[index].0;
+                let got = loop {
+                    let Some(key) = wait_for_key() else {
+                        record_score(state, "Simon Says", score);
+                        return;
+                    };
+                    if is_pause(key) {
+                        if pause_screen(state).is_none() {
+                            record_score(state, "Simon Says", score);
+                            return;
+                        }
+                        draw_prompt(
+                            state,
+                            "SIMON SAYS",
+                            "Repeat it with W/A/S/D. Q quits.",
+                            "",
+                            "",
+                        );
+                        continue;
+                    }
+                    break key;
+                };
+                if is_quit(got) {
+                    record_score(state, "Simon Says", score);
+                    return;
+                }
+                if got != Key::Char(expected) {
+                    record_score(state, "Simon Says", score);
+                    if !wait_menu(
+                        state,
+                        "Simon Says",
+                        &[
+                            format!("Sequence broke. Score: {score}"),
+                            format!("Round: {round_no}"),
+                        ],
+                        true,
+                    ) {
+                        return;
+                    }
+                    break;
+                }
+            }
+            score += sequence.len() as u32 * 10;
+            if sequence.len() > 40 {
+                record_score(state, "Simon Says", score);
+                if !wait_menu(
+                    state,
+                    "Simon Says",
+                    &[format!("Huge memory. Score: {score}")],
+                    true,
+                ) {
+                    return;
+                }
+                break;
+            }
+        }
+    }
+}
+
+fn draw_prompt(state: &AppState, title: &str, line1: &str, line2: &str, line3: &str) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        rows / 2 - 5,
+        title,
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 - 2,
+        line1,
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2,
+        line2,
+        &theme,
+        Role::Highlight,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 3,
+        line3,
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn wait_for_key() -> Option<Key> {
+    loop {
+        if let Some(key) = read_key() {
+            return Some(key);
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
+}
+
+fn game_reaction(state: &mut AppState) {
+    loop {
+        let keys = ['w', 'a', 's', 'd', 'j', 'k', 'l'];
+        let rounds = match state.difficulty_index {
+            0 => 10,
+            1 => 12,
+            _ => 14,
+        };
+        let mut score = 0u32;
+        let mut misses = 0u32;
+        for round in 1..=rounds {
+            draw_prompt(
+                state,
+                "REACTION TEST",
+                &format!("Round {round}/{rounds}"),
+                "Get ready...",
+                "",
+            );
+            thread::sleep(Duration::from_millis(state.rng.range(
+                350,
+                match state.difficulty_index {
+                    0 => 1400,
+                    1 => 1000,
+                    _ => 760,
+                },
+            ) as u64));
+            let prompt = keys[state.rng.usize(keys.len())];
+            let mut start = Instant::now();
+            draw_prompt(
+                state,
+                "REACTION TEST",
+                "",
+                &format!("PRESS {}", prompt.to_ascii_uppercase()),
+                "Q quits.",
+            );
+            loop {
+                let Some(key) = wait_for_key() else {
+                    break;
+                };
+                if is_pause(key) {
+                    if let Some(paused) = pause_screen(state) {
+                        start += paused;
+                        draw_prompt(
+                            state,
+                            "REACTION TEST",
+                            "",
+                            &format!("PRESS {}", prompt.to_ascii_uppercase()),
+                            "Q quits.",
+                        );
+                        continue;
+                    }
+                    return;
+                }
+                if is_quit(key) {
+                    return;
+                }
+                let elapsed = start.elapsed().as_millis() as u32;
+                if key == Key::Char(prompt) {
+                    score += 120u32.saturating_sub(elapsed / 8).max(5);
+                    play_sound(state, "score");
+                } else {
+                    misses += 1;
+                }
+                break;
+            }
+        }
+        let final_score = score.saturating_sub(misses * 25);
+        record_score(state, "Reaction Test", final_score);
+        if !wait_menu(
+            state,
+            "Reaction Test",
+            &[format!("Score: {final_score}"), format!("Misses: {misses}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn game_memory(state: &mut AppState) {
+    if !require_size(state, 22, 58, "Memory Match") {
+        return;
+    }
+    loop {
+        let mut values: Vec<char> = "AABBCCDDEEFFGGHH".chars().collect();
+        for i in 0..values.len() {
+            let j = state.rng.usize(values.len());
+            values.swap(i, j);
+        }
+        let mut revealed = vec![false; 16];
+        let mut cursor = 0usize;
+        let mut first: Option<usize> = None;
+        let mut moves = 0u32;
+        let mut matched = 0usize;
+        while matched < 16 {
+            draw_memory(state, &values, &revealed, cursor, first, moves);
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 4 => cursor -= 4,
+                    Key::Down | Key::Char('s') if cursor < 12 => cursor += 4,
+                    Key::Left | Key::Char('a') if cursor % 4 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 4 < 3 => cursor += 1,
+                    Key::Enter | Key::Space if !revealed[cursor] => {
+                        if let Some(prev) = first {
+                            moves += 1;
+                            if values[prev] == values[cursor] {
+                                revealed[prev] = true;
+                                revealed[cursor] = true;
+                                matched += 2;
+                                play_sound(state, "score");
+                            } else {
+                                draw_memory_peek(state, &values, &revealed, cursor, prev, moves);
+                                thread::sleep(Duration::from_millis(650));
+                            }
+                            first = None;
+                        } else {
+                            first = Some(cursor);
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let score = 1000u32.saturating_sub(moves * 25);
+        record_score(state, "Memory Match", score);
+        if !wait_menu(
+            state,
+            "Memory Match",
+            &[
+                format!("All matched. Score: {score}"),
+                format!("Moves: {moves}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_memory(
+    state: &AppState,
+    values: &[char],
+    revealed: &[bool],
+    cursor: usize,
+    first: Option<usize>,
+    moves: u32,
+) {
+    draw_memory_inner(state, values, revealed, cursor, first, None, moves);
+}
+
+fn draw_memory_peek(
+    state: &AppState,
+    values: &[char],
+    revealed: &[bool],
+    cursor: usize,
+    prev: usize,
+    moves: u32,
+) {
+    draw_memory_inner(
+        state,
+        values,
+        revealed,
+        cursor,
+        Some(prev),
+        Some(cursor),
+        moves,
+    );
+}
+
+fn draw_memory_inner(
+    state: &AppState,
+    values: &[char],
+    revealed: &[bool],
+    cursor: usize,
+    first: Option<usize>,
+    second: Option<usize>,
+    moves: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 5;
+    let left = cols / 2 - 10;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 1, "MEMORY MATCH", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        2,
+        &format!("Moves {moves}   WASD move   Enter flip   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    for i in 0..16 {
+        let row = top + (i / 4) * 2;
+        let col = left + (i % 4) * 5;
+        let shown = revealed[i] || first == Some(i) || second == Some(i);
+        let text = if shown {
+            format!("[{}]", values[i])
+        } else {
+            "[?]".to_string()
+        };
+        if i == cursor {
+            put_inv(&mut buf, row, col, &text, &theme, Role::Highlight);
+        } else {
+            put(
+                &mut buf,
+                row,
+                col,
+                &text,
+                &theme,
+                if shown { Role::Success } else { Role::Muted },
+                shown,
+            );
+        }
+    }
+    flush(&buf);
+}
+
+fn game_number(state: &mut AppState) {
+    loop {
+        let duration = match state.difficulty_index {
+            0 => 45,
+            1 => 35,
+            _ => 25,
+        };
+        let mut end_at = Instant::now() + Duration::from_secs(duration);
+        let mut score = 0u32;
+        let mut misses = 0u32;
+        while Instant::now() < end_at {
+            let a = state
+                .rng
+                .range(2, if state.difficulty_index == 2 { 30 } else { 18 });
+            let b = state
+                .rng
+                .range(2, if state.difficulty_index == 2 { 20 } else { 12 });
+            let op = state.rng.usize(3);
+            let (prompt, answer) = match op {
+                0 => (format!("{a} + {b} ="), a + b),
+                1 => (
+                    format!("{} - {} =", a.max(b), a.min(b)),
+                    a.max(b) - a.min(b),
+                ),
+                _ => (format!("{a} x {b} ="), a * b),
+            };
+            let mut typed = String::new();
+            loop {
+                draw_number(
+                    state,
+                    score,
+                    misses,
+                    end_at.saturating_duration_since(Instant::now()).as_secs(),
+                    &prompt,
+                    &typed,
+                );
+                if Instant::now() >= end_at {
+                    break;
+                }
+                if let Some(key) = read_key() {
+                    match key {
+                        Key::Char(c) if c.is_ascii_digit() => typed.push(c),
+                        Key::Backspace => {
+                            typed.pop();
+                        }
+                        Key::Enter => {
+                            if typed.parse::<i32>().ok() == Some(answer) {
+                                score += 40;
+                                play_sound(state, "score");
+                            } else {
+                                misses += 1;
+                            }
+                            break;
+                        }
+                        _ if is_pause(key) => {
+                            if let Some(paused) = pause_screen(state) {
+                                end_at += paused;
+                            } else {
+                                return;
+                            }
+                        }
+                        _ if is_quit(key) => return,
+                        _ => {}
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        let final_score = score.saturating_sub(misses * 10);
+        record_score(state, "Number Crunch", final_score);
+        if !wait_menu(
+            state,
+            "Number Crunch",
+            &[format!("Score: {final_score}"), format!("Misses: {misses}")],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_number(
+    state: &AppState,
+    score: u32,
+    misses: u32,
+    remaining: u64,
+    prompt: &str,
+    typed: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        rows / 2 - 5,
+        "NUMBER CRUNCH",
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 - 2,
+        &format!("Score {score}   Misses {misses}   Time {remaining}s"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2,
+        prompt,
+        &theme,
+        Role::Highlight,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 2,
+        &format!("> {typed}"),
+        &theme,
+        Role::Success,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        rows / 2 + 5,
+        "Type answer, Enter submits, Q quits.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_orbit(state: &mut AppState) {
+    if !require_size(state, 22, 62, "Orbit Guard") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(52, 17, 132, 38);
+        let center_p = (board_w / 2, board_h / 2);
+        let guard_positions = [
+            (0, -5),
+            (4, -3),
+            (5, 0),
+            (4, 3),
+            (0, 5),
+            (-4, 3),
+            (-5, 0),
+            (-4, -3),
+        ];
+        let mut guard = 0usize;
+        let mut sparks: Vec<(f64, f64, f64, f64)> = Vec::new();
+        let mut lives = state.difficulty().lives;
+        let mut score = 0u32;
+        let mut last_spawn = Instant::now();
+        while lives > 0 {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                match key {
+                    Key::Left | Key::Char('a') => {
+                        guard = (guard + guard_positions.len() - 1) % guard_positions.len()
+                    }
+                    Key::Right | Key::Char('d') => guard = (guard + 1) % guard_positions.len(),
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+            if last_spawn.elapsed()
+                >= Duration::from_millis((520.0 / state.difficulty().speed) as u64)
+            {
+                let side = state.rng.usize(4);
+                let (sx, sy) = match side {
+                    0 => (state.rng.range(1, board_w - 2) as f64, 1.0),
+                    1 => (state.rng.range(1, board_w - 2) as f64, board_h as f64 - 2.0),
+                    2 => (1.0, state.rng.range(1, board_h - 2) as f64),
+                    _ => (board_w as f64 - 2.0, state.rng.range(1, board_h - 2) as f64),
+                };
+                let dx = center_p.0 as f64 - sx;
+                let dy = center_p.1 as f64 - sy;
+                let len = (dx * dx + dy * dy).sqrt();
+                sparks.push((
+                    sx,
+                    sy,
+                    dx / len * 0.35 * state.difficulty().speed,
+                    dy / len * 0.35 * state.difficulty().speed,
+                ));
+                last_spawn = Instant::now();
+            }
+            for spark in &mut sparks {
+                spark.0 += spark.2;
+                spark.1 += spark.3;
+            }
+            let guard_pos = (
+                center_p.0 + guard_positions[guard].0,
+                center_p.1 + guard_positions[guard].1,
+            );
+            let mut kept = Vec::new();
+            for spark in sparks.into_iter() {
+                let sp = (spark.0.round() as i32, spark.1.round() as i32);
+                if (sp.0 - guard_pos.0).abs() <= 1 && (sp.1 - guard_pos.1).abs() <= 1 {
+                    score += 20;
+                    play_sound(state, "score");
+                } else if (sp.0 - center_p.0).abs() <= 1 && (sp.1 - center_p.1).abs() <= 1 {
+                    lives -= 1;
+                    play_sound(state, "alert");
+                } else {
+                    kept.push(spark);
+                }
+            }
+            sparks = kept;
+            draw_orbit(
+                state, board_w, board_h, center_p, guard_pos, &sparks, lives, score,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms);
+        }
+        record_score(state, "Orbit Guard", score);
+        if !wait_menu(
+            state,
+            "Orbit Guard",
+            &[
+                format!("Core breached. Score: {score}"),
+                "Rotate with A/D or arrows.".to_string(),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_orbit(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    center_p: (i32, i32),
+    guard_pos: (i32, i32),
+    sparks: &[(f64, f64, f64, f64)],
+    lives: i32,
+    score: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "ORBIT GUARD", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("Score {score}   Lives {lives}   A/D rotate   Q menu"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    put(
+        &mut buf,
+        top + center_p.1 as usize,
+        left + center_p.0 as usize,
+        "O",
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + guard_pos.1 as usize,
+        left + guard_pos.0 as usize,
+        "#",
+        &theme,
+        Role::Secondary,
+        true,
+    );
+    for &(x, y, _, _) in sparks {
+        put(
+            &mut buf,
+            top + y.round().max(0.0) as usize,
+            left + x.round().max(0.0) as usize,
+            "*",
+            &theme,
+            Role::Danger,
+            true,
+        );
+    }
+    flush(&buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn game_names_are_unique() {
+        let mut names = HashSet::new();
+        for game in GAMES {
+            assert!(
+                names.insert(game.name),
+                "duplicate game name: {}",
+                game.name
+            );
+        }
+    }
+
+    #[test]
+    fn micro_indices_are_valid_and_complete() {
+        let mut referenced = HashSet::new();
+        for game in GAMES {
+            if let GameKind::Micro(index) = &game.kind {
+                assert!(
+                    *index < MICRO_GAMES.len(),
+                    "micro game index {} out of range for {}",
+                    index,
+                    game.name
+                );
+                referenced.insert(*index);
+            }
+        }
+        assert_eq!(
+            referenced.len(),
+            MICRO_GAMES.len(),
+            "every micro game spec should be referenced exactly once"
+        );
+    }
+
+    #[test]
+    fn micro_games_have_distinct_dispatch_modes() {
+        let mut labels = HashSet::new();
+        for spec in MICRO_GAMES {
+            let label = micro_mode_label(spec.mode);
+            assert!(labels.insert(label.clone()), "repeated micro mode: {label}");
+        }
+    }
+
+    #[test]
+    fn visible_games_have_distinct_mechanic_signatures() {
+        let mut labels = HashSet::new();
+        for game in GAMES {
+            let label = game_mechanic_label(game);
+            assert!(
+                labels.insert(label.clone()),
+                "repeated game mechanic signature: {} ({})",
+                label,
+                game.name
+            );
+        }
+    }
+
+    fn game_mechanic_label(game: &GameInfo) -> String {
+        match game.kind {
+            GameKind::Snake => "snake-growth".to_string(),
+            GameKind::Tetris => "falling-polyomino-well".to_string(),
+            GameKind::Pong => "paddle-duel".to_string(),
+            GameKind::Invaders => "shielded-invader-shooter".to_string(),
+            GameKind::Missile => "reticle-city-defense".to_string(),
+            GameKind::Breakout => "brick-paddle-breakout".to_string(),
+            GameKind::Meteor => "falling-survival-dodge".to_string(),
+            GameKind::Racer => "traffic-lane-threading".to_string(),
+            GameKind::Frog => "traffic-crossing".to_string(),
+            GameKind::Target => "timed-reticle-targets".to_string(),
+            GameKind::Coin => "grid-coin-trap-collect".to_string(),
+            GameKind::Minefield => "scanner-minefield-exit".to_string(),
+            GameKind::Maze => "maze-route-exit".to_string(),
+            GameKind::Whack => "cursor-pop-targets".to_string(),
+            GameKind::Simon => "memory-sequence-repeat".to_string(),
+            GameKind::Reaction => "single-key-reaction".to_string(),
+            GameKind::Flappy => "up-down-gate-threading".to_string(),
+            GameKind::Asteroid => "asteroid-side-dodge".to_string(),
+            GameKind::Star => "star-bomb-catch".to_string(),
+            GameKind::Laser => "falling-block-shooter".to_string(),
+            GameKind::Dungeon => "enemy-treasure-stairs".to_string(),
+            GameKind::River => "river-fuel-raid".to_string(),
+            GameKind::Memory => "tile-pair-memory".to_string(),
+            GameKind::Number => "timed-arithmetic".to_string(),
+            GameKind::Circuit => "ordered-node-trace".to_string(),
+            GameKind::Orbit => "rotating-core-guard".to_string(),
+            GameKind::BlockDrop => "cargo-crate-catch".to_string(),
+            GameKind::CometCatcher => "combo-comet-catch".to_string(),
+            GameKind::BombSweeper => "hidden-bomb-scanner".to_string(),
+            GameKind::NeonDrift => "momentum-drift-heat".to_string(),
+            GameKind::CargoCatch => "cargo-quota-catch".to_string(),
+            GameKind::GemRush => "gem-combo-chain".to_string(),
+            GameKind::TrapRunner => "moving-trap-grid".to_string(),
+            GameKind::ReactorTrace => "reactor-node-trace".to_string(),
+            GameKind::DroneDodge => "drone-cloud-evasion".to_string(),
+            GameKind::PearlDiver => "oxygen-pearl-dive".to_string(),
+            GameKind::SolarSailer => "solar-charge-sailing".to_string(),
+            GameKind::VaultEscape => "key-locked-vault-exit".to_string(),
+            GameKind::DataStorm => "data-packet-combo".to_string(),
+            GameKind::PixelPop => "cluster-pop-puzzle".to_string(),
+            GameKind::BugHunt => "crawler-shooter".to_string(),
+            GameKind::FuelRun => "fuel-route-flight".to_string(),
+            GameKind::SparkChase => "spark-weave-chase".to_string(),
+            GameKind::IceSlide => "ice-slide-maze".to_string(),
+            GameKind::SignalTrace => "signal-node-trace".to_string(),
+            GameKind::OrbitalCourier => "delivery-quota-courier".to_string(),
+            GameKind::RainRunner => "rain-combo-catch".to_string(),
+            GameKind::ByteBlaster => "falling-letter-typing".to_string(),
+            GameKind::StormSurge => "current-pushed-surf".to_string(),
+            GameKind::CrystalCavern => "crystal-collection-cavern".to_string(),
+            GameKind::TicTacToe => "tic-tac-toe-cpu".to_string(),
+            GameKind::Micro(index) => {
+                format!("micro-{}", micro_mode_label(MICRO_GAMES[index].mode))
+            }
+        }
+    }
+
+    fn micro_mode_label(mode: MicroMode) -> String {
+        match mode {
+            MicroMode::ConnectFour => "connect-four".to_string(),
+            MicroMode::WordGuess(WordKind::Vault) => "word-vault".to_string(),
+            MicroMode::WordGuess(WordKind::Hangman) => "hangman".to_string(),
+            MicroMode::Blackjack => "blackjack-table".to_string(),
+            MicroMode::BlackjackBlitz => "blackjack-blitz".to_string(),
+            MicroMode::Battleship => "battleship".to_string(),
+            MicroMode::TowerStack => "tower-stack".to_string(),
+            MicroMode::LightsOut => "lights-out".to_string(),
+            MicroMode::SlidePuzzle => "slide-puzzle".to_string(),
+            MicroMode::DominoChain => "domino-chain".to_string(),
+            MicroMode::MiniGolf => "mini-golf".to_string(),
+            MicroMode::Darts => "darts".to_string(),
+            MicroMode::Mancala => "mancala".to_string(),
+            MicroMode::MiniSudoku => "mini-sudoku".to_string(),
+            MicroMode::Reversi => "reversi".to_string(),
+            MicroMode::Bowling => "bowling".to_string(),
+            MicroMode::SkeeBall => "skee-ball".to_string(),
+            MicroMode::Keeper => "keeper".to_string(),
+            MicroMode::Quest(kind) => format!("quest-{}", quest_kind_label(kind)),
+            MicroMode::Lane(kind) => format!("lane-{}", lane_kind_label(kind)),
+            MicroMode::Catch(kind) => format!("catch-{}", catch_kind_label(kind)),
+            MicroMode::Aim(kind) => format!("aim-{}", aim_kind_label(kind)),
+            MicroMode::Sequence(kind) => format!("sequence-{}", sequence_kind_label(kind)),
+        }
+    }
+
+    fn quest_kind_label(kind: QuestKind) -> &'static str {
+        match kind {
+            QuestKind::Checkmate => "checkmate",
+            QuestKind::Cipher => "cipher",
+            QuestKind::Marble => "marble",
+            QuestKind::Quantum => "quantum",
+            QuestKind::Go => "go",
+            QuestKind::Pirate => "pirate",
+            QuestKind::Samurai => "samurai",
+            QuestKind::Mars => "mars",
+            QuestKind::DeepSea => "deep-sea",
+            QuestKind::Volcano => "volcano",
+            QuestKind::Jungle => "jungle",
+            QuestKind::Dragon => "dragon",
+            QuestKind::Mirror => "mirror",
+        }
+    }
+
+    fn lane_kind_label(kind: LaneKind) -> &'static str {
+        match kind {
+            LaneKind::Rune => "rune",
+            LaneKind::Sea => "sea",
+            LaneKind::AirHockey => "air-hockey",
+            LaneKind::Hockey => "hockey",
+            LaneKind::Ski => "ski",
+            LaneKind::Snowboard => "snowboard",
+            LaneKind::Bmx => "bmx",
+            LaneKind::Horse => "horse",
+            LaneKind::Ninja => "ninja",
+            LaneKind::Moon => "moon",
+            LaneKind::Saturn => "saturn",
+            LaneKind::Submarine => "submarine",
+            LaneKind::Desert => "desert",
+            LaneKind::Time => "time",
+        }
+    }
+
+    fn catch_kind_label(kind: CatchKind) -> &'static str {
+        match kind {
+            CatchKind::Glyph => "glyph",
+            CatchKind::Poker => "poker",
+            CatchKind::Pinball => "pinball",
+            CatchKind::Tennis => "tennis",
+            CatchKind::Cricket => "cricket",
+            CatchKind::Alien => "alien",
+            CatchKind::Astro => "astro",
+            CatchKind::Castle => "castle",
+            CatchKind::Potion => "potion",
+        }
+    }
+
+    fn aim_kind_label(kind: AimKind) -> &'static str {
+        match kind {
+            AimKind::Basket => "basket",
+            AimKind::Archery => "archery",
+            AimKind::Curling => "curling",
+        }
+    }
+
+    fn sequence_kind_label(kind: SequenceKind) -> &'static str {
+        match kind {
+            SequenceKind::Factory => "factory",
+            SequenceKind::Duel => "duel",
+            SequenceKind::Trick => "trick",
+        }
+    }
+}
