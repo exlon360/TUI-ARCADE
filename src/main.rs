@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1184,6 +1184,8 @@ struct AppState {
     controls: Controls,
     rng: Rng,
     last_sound: HashMap<&'static str, Instant>,
+    last_any_sound: Option<Instant>,
+    sound_child: Option<Child>,
 }
 
 impl AppState {
@@ -1331,6 +1333,8 @@ fn run() -> io::Result<()> {
         controls,
         rng: Rng::new(),
         last_sound: HashMap::new(),
+        last_any_sound: None,
+        sound_child: None,
     };
     home_menu(&mut state)
 }
@@ -2279,12 +2283,11 @@ fn play_sound(state: &mut AppState, kind: &'static str) {
     if !state.sound_enabled {
         return;
     }
-    let gap_ms = match kind {
-        "score" => 140,
-        "wall" => 70,
-        "paddle" => 55,
-        "alert" => 180,
-        _ => 45,
+    let gap_ms = sound_gap_ms(kind);
+    let global_gap = if matches!(kind, "click" | "paddle" | "wall") {
+        85
+    } else {
+        125
     };
     let now = Instant::now();
     if state
@@ -2294,9 +2297,25 @@ fn play_sound(state: &mut AppState, kind: &'static str) {
     {
         return;
     }
+    if state
+        .last_any_sound
+        .is_some_and(|last| now.duration_since(last) < Duration::from_millis(global_gap))
+    {
+        return;
+    }
+    if let Some(child) = state.sound_child.as_mut() {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                state.sound_child = None;
+            }
+            Ok(None) => return,
+            Err(_) => {
+                state.sound_child = None;
+            }
+        }
+    }
     state.last_sound.insert(kind, now);
-    print!("\x07");
-    let _ = io::stdout().flush();
+    state.last_any_sound = Some(now);
     let sound = match kind {
         "click" => "/System/Library/Sounds/Tink.aiff",
         "paddle" => "/System/Library/Sounds/Pop.aiff",
@@ -2306,11 +2325,26 @@ fn play_sound(state: &mut AppState, kind: &'static str) {
         _ => "/System/Library/Sounds/Pop.aiff",
     };
     if PathBuf::from(sound).exists() {
-        let _ = Command::new("afplay")
+        state.sound_child = Command::new("afplay")
             .arg(sound)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
+            .spawn()
+            .ok();
+    } else {
+        print!("\x07");
+        let _ = io::stdout().flush();
+    }
+}
+
+fn sound_gap_ms(kind: &str) -> u64 {
+    match kind {
+        "score" => 220,
+        "wall" => 130,
+        "paddle" => 95,
+        "alert" => 280,
+        "click" => 120,
+        _ => 120,
     }
 }
 
@@ -16107,6 +16141,13 @@ mod tests {
         assert!(master.lives < DIFFICULTIES[2].lives);
         assert_eq!(PONG_ASSIST_NAMES, ["Off", "Light", "Strong"]);
         assert_eq!(PONG_SPEED_NAMES, ["Calm", "Classic", "Fast"]);
+    }
+
+    #[test]
+    fn sound_cooldowns_prevent_spam() {
+        assert!(sound_gap_ms("alert") > sound_gap_ms("score"));
+        assert!(sound_gap_ms("score") > sound_gap_ms("click"));
+        assert!(sound_gap_ms("paddle") >= 90);
     }
 
     #[test]

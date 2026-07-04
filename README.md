@@ -78,4 +78,4 @@ Scores save to `~/.tui_arcade_scores.json`. Custom Rust theme colors save to `~/
 
 Difficulty, Endless mode, sound/click toggles, and Pong tuning also persist between launches. Master difficulty is available for faster, lower-life runs.
 
-Sound uses the terminal bell plus macOS `afplay` system sounds for clicks, hits, wall bounces, alerts, and scoring.
+Sound uses throttled, single-voice macOS `afplay` system sounds for clicks, hits, wall bounces, alerts, and scoring. The terminal bell is only used as a fallback if system sounds are unavailable.
