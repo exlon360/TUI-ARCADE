@@ -18,7 +18,7 @@ The app opens on a console-style home screen with three buttons:
 
 Play opens the game library. Use W/S or the arrow keys to choose a game, then press Enter to launch it. High scores save automatically.
 
-The library has 113 games, including the original arcade set plus Chess, Checkers, Tic Tac Toe, Connect Four, Mancala Rush, Sudoku Sweep, Word Vault, Hangman Vault, Reversi Flip, Blackjack Table, Battleship Radar, Tower Stack, Laser Maze, Domino Slider, Bowling Lane, Skee Ball, Mini Golf, Darts Board, Soccer Keeper, Pirate Plunder, Robot Factory, Moon Miner, Dragon Hoard, Wizard Duel, Mirror Maze, and many more.
+The library has 115 games, including the original arcade set plus Tron Light Cycles, Tron Grid Run, Chess, Checkers, Tic Tac Toe, Connect Four, Mancala Rush, Sudoku Sweep, Word Vault, Hangman Vault, Reversi Flip, Blackjack Table, Battleship Radar, Tower Stack, Laser Maze, Domino Slider, Bowling Lane, Skee Ball, Mini Golf, Darts Board, Soccer Keeper, Pirate Plunder, Robot Factory, Moon Miner, Dragon Hoard, Wizard Duel, Mirror Maze, and many more.
 
 The expanded library no longer routes its later entries through repeated one-size-fits-all templates. Chess validates real piece movement, prevents moving into check, promotes pawns, and detects checkmate/stalemate; Checkers enforces diagonal moves, mandatory captures, and king promotion. Each microgame also has a distinct dispatch mode and a distinct rule profile: Connect Four has column drops and CPU blocking, Mancala sows and captures stones, Sudoku uses a playable 4x4 number grid, Word Vault and Hangman use different word-guess budgets, Domino builds a matching chain, Blackjack Blitz is a target-21 push-your-luck draw, Battleship has a hidden fleet and radar misses, Tower Stack uses timing/overlap, Laser Maze uses Lights Out toggles, Curling reads ice weight, Archery compensates for wind, Basket Toss uses a moving hoop, Bomb Sweeper defuses adjacent bombs, Reactor Trace has a meltdown timer, and the later adventure/sports/fantasy entries use separate quest, lane, catch, aim, or sequence rules.
 
@@ -29,6 +29,7 @@ Library tools:
 - `[` and `]` cycle categories
 - `/` edits the search filter
 - `X` clears search
+- `F` toggles the selected game as a favorite
 - Left/Right changes difficulty
 
 ## Settings
@@ -42,7 +43,7 @@ Settings includes:
 - Glyph set preset for borders, menu markers, scroll bars, and buttons
 - Startup title text
 - Controls rebinding tab
-- Theme Lab and individual saved custom colors
+- Theme Lab, individual saved custom colors, and saved theme slots
 - Sound on/off
 - Sound test
 - Click effects on/off
@@ -71,10 +72,11 @@ Theme Lab:
 - Up/Down chooses a UI role
 - Left/Right changes the selected color
 - 0 sets the background to terminal default
+- 1/2/3 saves the current color set into a reusable theme slot
 - P copies the current preset into Custom
 - R randomizes the custom theme
 
-Scores save to `~/.tui_arcade_scores.json`. Custom Rust theme colors save to `~/.tui_arcade_theme_rust.txt`, and the selected color theme saves to `~/.tui_arcade_theme_index.txt`. The selected glyph set saves to `~/.tui_arcade_glyphs.txt`. The startup title saves to `~/.tui_arcade_title.txt`. Rebound controls save to `~/.tui_arcade_controls.txt`.
+Scores save to `~/.tui_arcade_scores.json`. Favorites save to `~/.tui_arcade_favorites.txt`. Custom Rust theme colors save to `~/.tui_arcade_theme_rust.txt`, saved theme slots save to `~/.tui_arcade_saved_themes.txt`, and the selected color theme saves to `~/.tui_arcade_theme_index.txt`. The selected glyph set saves to `~/.tui_arcade_glyphs.txt`. The startup title saves to `~/.tui_arcade_title.txt`. Rebound controls save to `~/.tui_arcade_controls.txt`.
 
 Difficulty, Endless mode, sound/click toggles, and Pong tuning also persist between launches. Master difficulty is available for faster, lower-life runs.
 

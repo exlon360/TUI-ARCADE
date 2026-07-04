@@ -18,6 +18,7 @@ const TITLE_ART: [&str; 5] = [
 
 const DEFAULT_TITLE: &str = "TUI Arcade";
 const MAX_TITLE_LEN: usize = 60;
+const SAVED_THEME_SLOTS: usize = 3;
 
 const COLOR_NAMES: [&str; 16] = [
     "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White", "Gray", "Hot Red",
@@ -158,6 +159,7 @@ enum Key {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GameCategory {
     All,
+    Favorites,
     Arcade,
     Action,
     Puzzle,
@@ -167,8 +169,9 @@ enum GameCategory {
     Adventure,
 }
 
-const CATEGORIES: [GameCategory; 8] = [
+const CATEGORIES: [GameCategory; 9] = [
     GameCategory::All,
+    GameCategory::Favorites,
     GameCategory::Arcade,
     GameCategory::Action,
     GameCategory::Puzzle,
@@ -182,6 +185,7 @@ impl GameCategory {
     fn name(self) -> &'static str {
         match self {
             GameCategory::All => "All",
+            GameCategory::Favorites => "Favorites",
             GameCategory::Arcade => "Arcade",
             GameCategory::Action => "Action",
             GameCategory::Puzzle => "Puzzle",
@@ -198,6 +202,8 @@ enum GameKind {
     Snake,
     Tetris,
     Pong,
+    TronCycles,
+    TronGridRun,
     Invaders,
     Missile,
     Breakout,
@@ -382,6 +388,16 @@ const GAMES: &[GameInfo] = &[
         name: "Pong",
         summary: "Fast paddle duel with wall, paddle, and score sounds.",
         kind: GameKind::Pong,
+    },
+    GameInfo {
+        name: "Tron Light Cycles",
+        summary: "Out-turn a CPU rider while both hard-light trails become walls.",
+        kind: GameKind::TronCycles,
+    },
+    GameInfo {
+        name: "Tron Grid Run",
+        summary: "Steer a one-way light trail, collect cores, and avoid your own path.",
+        kind: GameKind::TronGridRun,
     },
     GameInfo {
         name: "Breakout",
@@ -1179,6 +1195,7 @@ struct AppState {
     glyph_sets: Vec<GlyphSet>,
     app_title: String,
     scores: HashMap<String, u32>,
+    favorites: HashSet<String>,
     sound_enabled: bool,
     click_effects: bool,
     controls: Controls,
@@ -1328,6 +1345,7 @@ fn run() -> io::Result<()> {
         glyph_sets,
         app_title: load_app_title(),
         scores: load_scores(),
+        favorites: load_favorites(),
         sound_enabled: load_sound_enabled(),
         click_effects: load_click_effects(),
         controls,
@@ -1552,6 +1570,7 @@ fn load_themes() -> Vec<Theme> {
             highlight: 0,
         },
     ];
+    themes.extend(load_saved_themes());
     themes.push(load_custom_theme().unwrap_or_else(|| {
         let mut custom = themes[0].clone();
         custom.name = "Custom".to_string();
@@ -1572,6 +1591,10 @@ fn scores_path() -> PathBuf {
 
 fn theme_path() -> PathBuf {
     home_dir().join(".tui_arcade_theme_rust.txt")
+}
+
+fn saved_themes_path() -> PathBuf {
+    home_dir().join(".tui_arcade_saved_themes.txt")
 }
 
 fn theme_index_path() -> PathBuf {
@@ -1608,6 +1631,10 @@ fn controls_path() -> PathBuf {
 
 fn title_path() -> PathBuf {
     home_dir().join(".tui_arcade_title.txt")
+}
+
+fn favorites_path() -> PathBuf {
+    home_dir().join(".tui_arcade_favorites.txt")
 }
 
 fn load_glyph_index(len: usize) -> usize {
@@ -1907,10 +1934,59 @@ fn erase_scores(state: &mut AppState) -> bool {
     }
 }
 
+fn load_favorites() -> HashSet<String> {
+    let valid_names: HashSet<&str> = GAMES.iter().map(|game| game.name).collect();
+    fs::read_to_string(favorites_path())
+        .ok()
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|name| valid_names.contains(name))
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn save_favorites(favorites: &HashSet<String>) {
+    let mut names: Vec<&str> = GAMES
+        .iter()
+        .map(|game| game.name)
+        .filter(|name| favorites.contains(*name))
+        .collect();
+    names.sort_unstable();
+    let text = if names.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", names.join("\n"))
+    };
+    let _ = fs::write(favorites_path(), text);
+}
+
+fn toggle_favorite(state: &mut AppState, name: &str) -> bool {
+    let enabled = if state.favorites.contains(name) {
+        state.favorites.remove(name);
+        false
+    } else {
+        state.favorites.insert(name.to_string());
+        true
+    };
+    save_favorites(&state.favorites);
+    enabled
+}
+
 fn load_custom_theme() -> Option<Theme> {
     let text = fs::read_to_string(theme_path()).ok()?;
-    let mut theme = Theme {
-        name: "Custom".to_string(),
+    let mut theme = default_theme("Custom");
+    for line in text.lines() {
+        apply_theme_line(&mut theme, line);
+    }
+    Some(theme)
+}
+
+fn default_theme(name: &str) -> Theme {
+    Theme {
+        name: name.to_string(),
         fg: 15,
         bg: Some(0),
         title: 14,
@@ -1920,45 +1996,131 @@ fn load_custom_theme() -> Option<Theme> {
         success: 10,
         muted: 8,
         highlight: 11,
-    };
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        match key {
-            "fg" => theme.fg = value.parse().unwrap_or(theme.fg),
-            "bg" => theme.bg = parse_bg(value),
-            "title" => theme.title = value.parse().unwrap_or(theme.title),
-            "accent" => theme.accent = value.parse().unwrap_or(theme.accent),
-            "secondary" => theme.secondary = value.parse().unwrap_or(theme.secondary),
-            "danger" => theme.danger = value.parse().unwrap_or(theme.danger),
-            "success" => theme.success = value.parse().unwrap_or(theme.success),
-            "muted" => theme.muted = value.parse().unwrap_or(theme.muted),
-            "highlight" => theme.highlight = value.parse().unwrap_or(theme.highlight),
-            _ => {}
-        }
     }
-    Some(theme)
+}
+
+fn apply_theme_line(theme: &mut Theme, line: &str) {
+    let Some((key, value)) = line.split_once('=') else {
+        return;
+    };
+    match key.trim() {
+        "fg" => theme.fg = parse_theme_color(value, theme.fg),
+        "bg" => theme.bg = parse_bg(value.trim()),
+        "title" => theme.title = parse_theme_color(value, theme.title),
+        "accent" => theme.accent = parse_theme_color(value, theme.accent),
+        "secondary" => theme.secondary = parse_theme_color(value, theme.secondary),
+        "danger" => theme.danger = parse_theme_color(value, theme.danger),
+        "success" => theme.success = parse_theme_color(value, theme.success),
+        "muted" => theme.muted = parse_theme_color(value, theme.muted),
+        "highlight" => theme.highlight = parse_theme_color(value, theme.highlight),
+        _ => {}
+    }
+}
+
+fn parse_theme_color(value: &str, fallback: u8) -> u8 {
+    value
+        .trim()
+        .parse::<u8>()
+        .ok()
+        .filter(|color| *color < COLOR_NAMES.len() as u8)
+        .unwrap_or(fallback)
 }
 
 fn parse_bg(value: &str) -> Option<u8> {
     if value == "none" {
         None
     } else {
-        value.parse().ok()
+        value
+            .parse()
+            .ok()
+            .filter(|color| *color < COLOR_NAMES.len() as u8)
     }
 }
 
-fn save_custom_theme(theme: &Theme) {
+fn theme_storage_text(theme: &Theme) -> String {
     let bg = theme
         .bg
         .map(|v| v.to_string())
         .unwrap_or_else(|| "none".to_string());
-    let text = format!(
+    format!(
         "fg={}\nbg={}\ntitle={}\naccent={}\nsecondary={}\ndanger={}\nsuccess={}\nmuted={}\nhighlight={}\n",
         theme.fg, bg, theme.title, theme.accent, theme.secondary, theme.danger, theme.success, theme.muted, theme.highlight
-    );
-    let _ = fs::write(theme_path(), text);
+    )
+}
+
+fn save_custom_theme(theme: &Theme) {
+    let _ = fs::write(theme_path(), theme_storage_text(theme));
+}
+
+fn load_saved_theme_slots() -> Vec<Option<Theme>> {
+    let mut slots = vec![None; SAVED_THEME_SLOTS];
+    let Ok(text) = fs::read_to_string(saved_themes_path()) else {
+        return slots;
+    };
+    let mut current_slot: Option<usize> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("[Saved ") && trimmed.ends_with(']') {
+            let slot = trimmed
+                .trim_start_matches("[Saved ")
+                .trim_end_matches(']')
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .filter(|slot| *slot < SAVED_THEME_SLOTS);
+            current_slot = slot;
+            if let Some(slot) = slot {
+                slots[slot] = Some(default_theme(&format!("Saved {}", slot + 1)));
+            }
+            continue;
+        }
+        if let Some(slot) = current_slot {
+            if let Some(theme) = &mut slots[slot] {
+                apply_theme_line(theme, trimmed);
+            }
+        }
+    }
+    slots
+}
+
+fn load_saved_themes() -> Vec<Theme> {
+    load_saved_theme_slots().into_iter().flatten().collect()
+}
+
+fn save_saved_theme_slots(slots: &[Option<Theme>]) -> bool {
+    let mut text = String::new();
+    for (index, theme) in slots.iter().enumerate() {
+        if let Some(theme) = theme {
+            text.push_str(&format!("[Saved {}]\n", index + 1));
+            text.push_str(&theme_storage_text(theme));
+            text.push('\n');
+        }
+    }
+    fs::write(saved_themes_path(), text).is_ok()
+}
+
+fn save_theme_slot(state: &mut AppState, slot: usize) -> bool {
+    if slot >= SAVED_THEME_SLOTS {
+        return false;
+    }
+    let mut slots = load_saved_theme_slots();
+    let mut saved = state.theme().clone();
+    saved.name = format!("Saved {}", slot + 1);
+    slots[slot] = Some(saved);
+    if !save_saved_theme_slots(&slots) {
+        return false;
+    }
+    let saved_name = format!("Saved {}", slot + 1);
+    state.themes = load_themes();
+    if let Some(index) = state
+        .themes
+        .iter()
+        .position(|theme| theme.name == saved_name)
+    {
+        state.theme_index = index;
+        save_theme_index(index);
+    }
+    true
 }
 
 fn terminal_size() -> (usize, usize) {
@@ -2949,7 +3111,11 @@ fn draw_home(state: &AppState, selected: usize) {
         &mut buf,
         top + 9,
         panel_left + 2,
-        &format!("Saved scores: {}", state.scores.len()),
+        &format!(
+            "Saved scores: {}   Favorites: {}",
+            state.scores.len(),
+            state.favorites.len()
+        ),
         &theme,
         Role::Success,
         false,
@@ -3001,6 +3167,7 @@ fn game_category(game: &GameInfo) -> GameCategory {
         | GameKind::TicTacToe => GameCategory::Puzzle,
         GameKind::Chess | GameKind::Checkers => GameCategory::Strategy,
         GameKind::Pong
+        | GameKind::TronCycles
         | GameKind::Breakout
         | GameKind::Meteor
         | GameKind::Target
@@ -3028,17 +3195,20 @@ fn game_category(game: &GameInfo) -> GameCategory {
             .get(index)
             .map(|game| game.category)
             .unwrap_or(GameCategory::Arcade),
+        GameKind::TronGridRun => GameCategory::Action,
         _ => GameCategory::Action,
     }
 }
 
-fn filtered_game_indices(category: GameCategory, search: &str) -> Vec<usize> {
+fn filtered_game_indices(state: &AppState, category: GameCategory, search: &str) -> Vec<usize> {
     let query = search.trim().to_ascii_lowercase();
     GAMES
         .iter()
         .enumerate()
         .filter(|(_, game)| {
-            (category == GameCategory::All || game_category(game) == category)
+            (category == GameCategory::All
+                || (category == GameCategory::Favorites && state.favorites.contains(game.name))
+                || game_category(game) == category)
                 && (query.is_empty()
                     || game.name.to_ascii_lowercase().contains(&query)
                     || game.summary.to_ascii_lowercase().contains(&query)
@@ -3060,7 +3230,7 @@ fn play_menu(state: &mut AppState) {
     let mut last_size = terminal_size();
     loop {
         let category = CATEGORIES[category_index];
-        let filtered = filtered_game_indices(category, &search);
+        let filtered = filtered_game_indices(state, category, &search);
         if !filtered.is_empty() {
             selected = selected.min(filtered.len() - 1);
         } else {
@@ -3148,6 +3318,14 @@ fn play_menu(state: &mut AppState) {
                     search.clear();
                     selected = 0;
                     dirty = true;
+                }
+                Key::Char('f') => {
+                    if let Some(&game_index) = filtered.get(selected) {
+                        let name = GAMES[game_index].name;
+                        toggle_favorite(state, name);
+                        click_effect(state, "favorite");
+                        dirty = true;
+                    }
                 }
                 Key::Enter | Key::Space => {
                     if let Some(&game_index) = filtered.get(selected) {
@@ -3251,15 +3429,21 @@ fn draw_play_menu(
         let game = &GAMES[index];
         let score = state.scores.get(game.name).copied().unwrap_or(0);
         let row = panel_top + 2 + row_index;
+        let favorite_mark = if state.favorites.contains(game.name) {
+            "*"
+        } else {
+            " "
+        };
         let label = format!(
-            "{} {:03}. {}",
+            "{}{} {:03}. {}",
             if pos == selected {
                 glyphs.selector
             } else {
                 " "
             },
+            favorite_mark,
             index + 1,
-            trim(game.name, list_w - 15)
+            trim(game.name, list_w - 16)
         );
         if pos == selected {
             put_inv(
@@ -3380,9 +3564,14 @@ fn draw_play_menu(
         panel_top + 6,
         detail_left + 2,
         &format!(
-            "{}   High score: {}",
+            "{}   High score: {}   Favorite: {}",
             game_category(game).name(),
-            state.scores.get(game.name).copied().unwrap_or(0)
+            state.scores.get(game.name).copied().unwrap_or(0),
+            if state.favorites.contains(game.name) {
+                "yes"
+            } else {
+                "no"
+            }
         ),
         &theme,
         Role::Success,
@@ -3403,7 +3592,7 @@ fn draw_play_menu(
             &mut buf,
             controls_top + 1,
             detail_left + 2,
-            "[ ] category | T colors | G glyphs",
+            "[ ] category | F favorite | T colors | G glyphs",
             &theme,
             Role::Muted,
             false,
@@ -3447,7 +3636,7 @@ fn draw_play_menu(
             &mut buf,
             controls_top + 2,
             detail_left + 2,
-            "/ search | X clear | [ ] category",
+            "/ search | X clear | [ ] category | F favorite",
             &theme,
             Role::Muted,
             false,
@@ -3512,17 +3701,21 @@ const SETTING_PONG_SPEED: usize = 3;
 const SETTING_COLOR_THEME: usize = 4;
 const SETTING_GLYPH_SET: usize = 5;
 const SETTING_STARTUP_TITLE: usize = 6;
-const SETTING_TITLE_COLOR: usize = 7;
-const SETTING_ACCENT_COLOR: usize = 8;
-const SETTING_DANGER_COLOR: usize = 9;
-const SETTING_HIGHLIGHT_COLOR: usize = 10;
-const SETTING_BACKGROUND: usize = 11;
-const SETTING_SOUND: usize = 12;
-const SETTING_SOUND_TEST: usize = 13;
-const SETTING_CLICK_EFFECTS: usize = 14;
-const SETTING_CONTROLS: usize = 15;
-const SETTING_ERASE_SCORES: usize = 16;
-const SETTING_BACK: usize = 17;
+const SETTING_TEXT_COLOR: usize = 7;
+const SETTING_TITLE_COLOR: usize = 8;
+const SETTING_ACCENT_COLOR: usize = 9;
+const SETTING_SECONDARY_COLOR: usize = 10;
+const SETTING_DANGER_COLOR: usize = 11;
+const SETTING_SUCCESS_COLOR: usize = 12;
+const SETTING_MUTED_COLOR: usize = 13;
+const SETTING_HIGHLIGHT_COLOR: usize = 14;
+const SETTING_BACKGROUND: usize = 15;
+const SETTING_SOUND: usize = 16;
+const SETTING_SOUND_TEST: usize = 17;
+const SETTING_CLICK_EFFECTS: usize = 18;
+const SETTING_CONTROLS: usize = 19;
+const SETTING_ERASE_SCORES: usize = 20;
+const SETTING_BACK: usize = 21;
 
 fn settings_rows(state: &AppState) -> Vec<(String, String)> {
     vec![
@@ -3549,6 +3742,10 @@ fn settings_rows(state: &AppState) -> Vec<(String, String)> {
         ),
         ("Startup title".to_string(), state.app_title.clone()),
         (
+            "Text color".to_string(),
+            COLOR_NAMES[state.theme().fg as usize].to_string(),
+        ),
+        (
             "Title color".to_string(),
             COLOR_NAMES[state.theme().title as usize].to_string(),
         ),
@@ -3557,8 +3754,20 @@ fn settings_rows(state: &AppState) -> Vec<(String, String)> {
             COLOR_NAMES[state.theme().accent as usize].to_string(),
         ),
         (
+            "Secondary color".to_string(),
+            COLOR_NAMES[state.theme().secondary as usize].to_string(),
+        ),
+        (
             "Danger color".to_string(),
             COLOR_NAMES[state.theme().danger as usize].to_string(),
+        ),
+        (
+            "Success color".to_string(),
+            COLOR_NAMES[state.theme().success as usize].to_string(),
+        ),
+        (
+            "Muted color".to_string(),
+            COLOR_NAMES[state.theme().muted as usize].to_string(),
         ),
         (
             "Highlight color".to_string(),
@@ -3636,9 +3845,13 @@ fn settings_menu(state: &mut AppState) {
                             "Title edit cancelled.".to_string()
                         };
                     }
-                    SETTING_TITLE_COLOR
+                    SETTING_TEXT_COLOR
+                    | SETTING_TITLE_COLOR
                     | SETTING_ACCENT_COLOR
+                    | SETTING_SECONDARY_COLOR
                     | SETTING_DANGER_COLOR
+                    | SETTING_SUCCESS_COLOR
+                    | SETTING_MUTED_COLOR
                     | SETTING_HIGHLIGHT_COLOR
                     | SETTING_BACKGROUND => settings_adjust(state, selected, 1, &mut message),
                     SETTING_SOUND => {
@@ -3756,6 +3969,12 @@ fn settings_adjust(state: &mut AppState, selected: usize, delta: i32, message: &
         SETTING_STARTUP_TITLE => {
             *message = "Press Enter to edit the startup title.".to_string();
         }
+        SETTING_TEXT_COLOR => {
+            let theme = state.custom_theme_mut();
+            theme.fg = wrap_color(theme.fg, delta);
+            save_custom_theme(theme);
+            *message = "Custom text color saved.".to_string();
+        }
         SETTING_TITLE_COLOR => {
             let theme = state.custom_theme_mut();
             theme.title = wrap_color(theme.title, delta);
@@ -3768,11 +3987,29 @@ fn settings_adjust(state: &mut AppState, selected: usize, delta: i32, message: &
             save_custom_theme(theme);
             *message = "Custom accent color saved.".to_string();
         }
+        SETTING_SECONDARY_COLOR => {
+            let theme = state.custom_theme_mut();
+            theme.secondary = wrap_color(theme.secondary, delta);
+            save_custom_theme(theme);
+            *message = "Custom secondary color saved.".to_string();
+        }
         SETTING_DANGER_COLOR => {
             let theme = state.custom_theme_mut();
             theme.danger = wrap_color(theme.danger, delta);
             save_custom_theme(theme);
             *message = "Custom danger color saved.".to_string();
+        }
+        SETTING_SUCCESS_COLOR => {
+            let theme = state.custom_theme_mut();
+            theme.success = wrap_color(theme.success, delta);
+            save_custom_theme(theme);
+            *message = "Custom success color saved.".to_string();
+        }
+        SETTING_MUTED_COLOR => {
+            let theme = state.custom_theme_mut();
+            theme.muted = wrap_color(theme.muted, delta);
+            save_custom_theme(theme);
+            *message = "Custom muted color saved.".to_string();
         }
         SETTING_HIGHLIGHT_COLOR => {
             let theme = state.custom_theme_mut();
@@ -4254,8 +4491,13 @@ fn draw_settings(state: &AppState, selected: usize, message: &str, rows_data: &[
         Role::Accent,
         glyphs,
     );
-    for (i, (label, value)) in rows_data.iter().enumerate() {
-        let row = top + 2 + i;
+    let visible = box_h.saturating_sub(6).max(1);
+    let start = selected
+        .saturating_sub(visible - 1)
+        .min(rows_data.len().saturating_sub(visible));
+    for (row_offset, i) in (start..(start + visible).min(rows_data.len())).enumerate() {
+        let (label, value) = &rows_data[i];
+        let row = top + 2 + row_offset;
         let marker = if i == selected { glyphs.selector } else { " " };
         let left_text = format!("{marker} {label}");
         if i == selected {
@@ -4300,6 +4542,18 @@ fn draw_settings(state: &AppState, selected: usize, message: &str, rows_data: &[
             );
         }
     }
+    draw_scrollbar(
+        &mut buf,
+        top + 1,
+        left + box_w.saturating_sub(3),
+        box_h.saturating_sub(5),
+        rows_data.len().max(1),
+        visible,
+        start,
+        &theme,
+        Role::Muted,
+        glyphs,
+    );
     put(
         &mut buf,
         top + box_h.saturating_sub(3),
@@ -4333,7 +4587,7 @@ fn draw_settings(state: &AppState, selected: usize, message: &str, rows_data: &[
 fn theme_lab(state: &mut AppState) {
     let mut selected = 0usize;
     let mut message =
-        "Left/Right edits. P copies current preset. R randomizes. Q returns.".to_string();
+        "Left/Right edits. 1/2/3 save slots. P copies preset. R randomizes.".to_string();
     let mut dirty = true;
     let mut last_size = terminal_size();
     loop {
@@ -4472,7 +4726,7 @@ fn theme_lab(state: &mut AppState) {
                     Role::Success,
                     true,
                 );
-                center(&mut buf, rows - 2, "Up/Down role | Left/Right color | 0 bg default | P copy preset | R random | Q back", &theme, Role::Muted, true, cols);
+                center(&mut buf, rows - 2, "Up/Down role | Left/Right color | 1/2/3 save slots | 0 bg default | P copy preset | R random | Q back", &theme, Role::Muted, true, cols);
             }
             flush(&buf);
             dirty = false;
@@ -4519,6 +4773,18 @@ fn theme_lab(state: &mut AppState) {
                     theme.success = colors[4];
                     save_custom_theme(theme);
                     message = "Randomized Custom.".to_string();
+                }
+                Key::Char('1') | Key::Char('2') | Key::Char('3') => {
+                    let slot = match key {
+                        Key::Char('1') => 0,
+                        Key::Char('2') => 1,
+                        _ => 2,
+                    };
+                    message = if save_theme_slot(state, slot) {
+                        format!("Saved current color set to Saved {}.", slot + 1)
+                    } else {
+                        "Could not save theme slot.".to_string()
+                    };
                 }
                 Key::Esc | Key::Char('q') => return,
                 _ => {}
@@ -4608,6 +4874,8 @@ fn play_game(state: &mut AppState, game: &GameInfo) {
         GameKind::Snake => game_snake(state),
         GameKind::Tetris => game_tetris(state),
         GameKind::Pong => game_pong(state),
+        GameKind::TronCycles => game_tron_cycles(state),
+        GameKind::TronGridRun => game_tron_grid_run(state),
         GameKind::Invaders => game_invaders(state),
         GameKind::Missile => game_missile(state),
         GameKind::Breakout => game_breakout(state),
@@ -11203,6 +11471,600 @@ fn draw_pong(
     flush(&buf);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TronDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+fn tron_delta(dir: TronDir) -> (i32, i32) {
+    match dir {
+        TronDir::Up => (0, -1),
+        TronDir::Down => (0, 1),
+        TronDir::Left => (-1, 0),
+        TronDir::Right => (1, 0),
+    }
+}
+
+fn tron_opposite(a: TronDir, b: TronDir) -> bool {
+    matches!(
+        (a, b),
+        (TronDir::Up, TronDir::Down)
+            | (TronDir::Down, TronDir::Up)
+            | (TronDir::Left, TronDir::Right)
+            | (TronDir::Right, TronDir::Left)
+    )
+}
+
+fn tron_turn_dir(current: TronDir, key: Key) -> TronDir {
+    let wanted = match key {
+        Key::Up | Key::Char('w') => Some(TronDir::Up),
+        Key::Down | Key::Char('s') => Some(TronDir::Down),
+        Key::Left | Key::Char('a') => Some(TronDir::Left),
+        Key::Right | Key::Char('d') => Some(TronDir::Right),
+        _ => None,
+    };
+    match wanted {
+        Some(dir) if !tron_opposite(current, dir) => dir,
+        _ => current,
+    }
+}
+
+fn tron_next_position(pos: (i32, i32), dir: TronDir) -> (i32, i32) {
+    let delta = tron_delta(dir);
+    (pos.0 + delta.0, pos.1 + delta.1)
+}
+
+fn tron_crashes(pos: (i32, i32), w: i32, h: i32, occupied: &HashSet<(i32, i32)>) -> bool {
+    pos.0 <= 0 || pos.0 >= w - 1 || pos.1 <= 0 || pos.1 >= h - 1 || occupied.contains(&pos)
+}
+
+fn tron_safe_dirs(
+    pos: (i32, i32),
+    current: TronDir,
+    w: i32,
+    h: i32,
+    occupied: &HashSet<(i32, i32)>,
+) -> Vec<TronDir> {
+    [TronDir::Up, TronDir::Down, TronDir::Left, TronDir::Right]
+        .into_iter()
+        .filter(|dir| !tron_opposite(current, *dir))
+        .filter(|dir| !tron_crashes(tron_next_position(pos, *dir), w, h, occupied))
+        .collect()
+}
+
+fn tron_run_length(
+    pos: (i32, i32),
+    dir: TronDir,
+    w: i32,
+    h: i32,
+    occupied: &HashSet<(i32, i32)>,
+) -> i32 {
+    let mut count = 0;
+    let mut cursor = pos;
+    loop {
+        cursor = tron_next_position(cursor, dir);
+        if tron_crashes(cursor, w, h, occupied) {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
+fn tron_choose_cpu_dir(
+    state: &mut AppState,
+    pos: (i32, i32),
+    current: TronDir,
+    player: (i32, i32),
+    w: i32,
+    h: i32,
+    occupied: &HashSet<(i32, i32)>,
+) -> TronDir {
+    let safe = tron_safe_dirs(pos, current, w, h, occupied);
+    if safe.is_empty() {
+        return current;
+    }
+    if state.difficulty_index == 0 && state.rng.chance(1, 4) {
+        return safe[state.rng.usize(safe.len())];
+    }
+    let chase_weight = match state.difficulty_index {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 3,
+    };
+    let mut best = safe[0];
+    let mut best_score = i32::MIN;
+    for dir in safe {
+        let next = tron_next_position(pos, dir);
+        let distance = (next.0 - player.0).abs() + (next.1 - player.1).abs();
+        let straight_bonus = if dir == current { 4 } else { 0 };
+        let score = tron_run_length(pos, dir, w, h, occupied) * 5 - distance * chase_weight
+            + straight_bonus
+            + state.rng.range(0, 6);
+        if score > best_score {
+            best_score = score;
+            best = dir;
+        }
+    }
+    best
+}
+
+fn game_tron_cycles(state: &mut AppState) {
+    if !require_size(state, 22, 70, "Tron Light Cycles") {
+        return;
+    }
+    loop {
+        let target_rounds = if state.endless_mode { 9 } else { 3 };
+        let mut player_wins = 0;
+        let mut cpu_wins = 0;
+        let mut match_score = 0u32;
+        let mut round = 1;
+        while player_wins < target_rounds && cpu_wins < target_rounds {
+            let (board_w, board_h) = full_board(60, 18, 132, 38);
+            let mut player = (board_w / 4, board_h / 2);
+            let mut cpu = (board_w * 3 / 4, board_h / 2);
+            let mut player_dir = TronDir::Right;
+            let mut cpu_dir = TronDir::Left;
+            let mut player_trail = HashSet::new();
+            let mut cpu_trail = HashSet::new();
+            player_trail.insert(player);
+            cpu_trail.insert(cpu);
+            let mut tick = 0u32;
+            let mut status = format!("Round {round}. First to {target_rounds}.");
+            let cpu_reaction = match state.difficulty_index {
+                0 => 7,
+                1 => 5,
+                2 => 4,
+                _ => 3,
+            };
+            loop {
+                let frame = Instant::now();
+                while let Some(key) = read_key() {
+                    if is_pause(key) {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                        continue;
+                    }
+                    if is_quit(key) {
+                        return;
+                    }
+                    player_dir = tron_turn_dir(player_dir, key);
+                }
+                tick += 1;
+                let occupied: HashSet<(i32, i32)> =
+                    player_trail.union(&cpu_trail).copied().collect();
+                if tick % cpu_reaction == 0 {
+                    cpu_dir = tron_choose_cpu_dir(
+                        state, cpu, cpu_dir, player, board_w, board_h, &occupied,
+                    );
+                }
+                let next_player = tron_next_position(player, player_dir);
+                let next_cpu = tron_next_position(cpu, cpu_dir);
+                let swap_crash = next_player == cpu && next_cpu == player;
+                let head_on = next_player == next_cpu || swap_crash;
+                let player_crash =
+                    head_on || tron_crashes(next_player, board_w, board_h, &occupied);
+                let cpu_crash = head_on || tron_crashes(next_cpu, board_w, board_h, &occupied);
+                if player_crash || cpu_crash {
+                    if player_crash && cpu_crash {
+                        status = "Both riders crashed. No point.".to_string();
+                        play_sound(state, "alert");
+                    } else if cpu_crash {
+                        player_wins += 1;
+                        match_score += 500 + tick;
+                        status = "CPU crashed. You take the round.".to_string();
+                        play_sound(state, "score");
+                    } else {
+                        cpu_wins += 1;
+                        status = "You hit a trail. CPU takes the round.".to_string();
+                        play_sound(state, "alert");
+                    }
+                    draw_tron_cycles(
+                        state,
+                        board_w,
+                        board_h,
+                        &player_trail,
+                        &cpu_trail,
+                        player,
+                        cpu,
+                        player_wins,
+                        cpu_wins,
+                        target_rounds,
+                        &status,
+                    );
+                    thread::sleep(Duration::from_millis(650));
+                    break;
+                }
+                player = next_player;
+                cpu = next_cpu;
+                player_trail.insert(player);
+                cpu_trail.insert(cpu);
+                match_score += 1;
+                draw_tron_cycles(
+                    state,
+                    board_w,
+                    board_h,
+                    &player_trail,
+                    &cpu_trail,
+                    player,
+                    cpu,
+                    player_wins,
+                    cpu_wins,
+                    target_rounds,
+                    &status,
+                );
+                sleep_frame(frame, state.difficulty().tick_ms + 8);
+            }
+            round += 1;
+        }
+        record_score(state, "Tron Light Cycles", match_score);
+        let result = if player_wins > cpu_wins {
+            "You won the grid duel."
+        } else {
+            "CPU owned the grid."
+        };
+        if !wait_menu(
+            state,
+            "Tron Light Cycles",
+            &[
+                result.to_string(),
+                format!("Rounds: you {player_wins}, CPU {cpu_wins}"),
+                format!("Score: {match_score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn draw_tron_cycles(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    player_trail: &HashSet<(i32, i32)>,
+    cpu_trail: &HashSet<(i32, i32)>,
+    player: (i32, i32),
+    cpu: (i32, i32),
+    player_wins: i32,
+    cpu_wins: i32,
+    target_rounds: i32,
+    status: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        "TRON LIGHT CYCLES",
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "You {player_wins}   CPU {cpu_wins}   Target {target_rounds}   WASD steer   P pause   Q menu"
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in cpu_trail {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            "+",
+            &theme,
+            Role::Danger,
+            false,
+        );
+    }
+    for &(x, y) in player_trail {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            ".",
+            &theme,
+            Role::Secondary,
+            false,
+        );
+    }
+    put(
+        &mut buf,
+        top + cpu.1 as usize,
+        left + cpu.0 as usize,
+        "C",
+        &theme,
+        Role::Danger,
+        true,
+    );
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize,
+        "@",
+        &theme,
+        Role::Success,
+        true,
+    );
+    center(
+        &mut buf,
+        rows - 2,
+        &trim(status, cols.saturating_sub(4)),
+        &theme,
+        Role::Muted,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_tron_grid_run(state: &mut AppState) {
+    if !require_size(state, 22, 70, "Tron Grid Run") {
+        return;
+    }
+    loop {
+        let (board_w, board_h) = full_board(58, 18, 132, 38);
+        let goal = if state.endless_mode {
+            50
+        } else {
+            match state.difficulty_index {
+                0 => 8,
+                1 => 10,
+                2 => 12,
+                _ => 14,
+            }
+        };
+        let max_trail = match state.difficulty_index {
+            0 => 22,
+            1 => 30,
+            2 => 38,
+            _ => 46,
+        };
+        let mut player = (board_w / 2, board_h / 2);
+        let mut dir = TronDir::Right;
+        let mut trail = HashSet::new();
+        let mut trail_order = VecDeque::new();
+        trail.insert(player);
+        trail_order.push_back(player);
+        let mut core = tron_random_free_cell(state, board_w, board_h, &trail);
+        let mut lives = state.starting_lives();
+        let mut score = 0u32;
+        let mut collected = 0;
+        let mut status = "Collect cores. Your fading trail is still lethal.".to_string();
+        while lives > 0 && collected < goal {
+            let frame = Instant::now();
+            while let Some(key) = read_key() {
+                if is_pause(key) {
+                    if pause_screen(state).is_none() {
+                        return;
+                    }
+                    continue;
+                }
+                if is_quit(key) {
+                    return;
+                }
+                dir = tron_turn_dir(dir, key);
+            }
+            let next = tron_next_position(player, dir);
+            if tron_crashes(next, board_w, board_h, &trail) {
+                lives -= 1;
+                status = if lives > 0 {
+                    "Trail crash. Grid reset.".to_string()
+                } else {
+                    "Final trail crash.".to_string()
+                };
+                play_sound(state, "alert");
+                trail.clear();
+                trail_order.clear();
+                player = (board_w / 2, board_h / 2);
+                dir = TronDir::Right;
+                trail.insert(player);
+                trail_order.push_back(player);
+                core = tron_random_free_cell(state, board_w, board_h, &trail);
+                draw_tron_grid_run(
+                    state, board_w, board_h, &trail, player, core, lives, score, collected, goal,
+                    &status,
+                );
+                thread::sleep(Duration::from_millis(350));
+                continue;
+            }
+            player = next;
+            trail.insert(player);
+            trail_order.push_back(player);
+            while trail_order.len() > max_trail {
+                if let Some(old) = trail_order.pop_front() {
+                    if old != player {
+                        trail.remove(&old);
+                    }
+                }
+            }
+            if player == core {
+                collected += 1;
+                score += 80 + trail_order.len() as u32;
+                for _ in 0..(max_trail / 3) {
+                    if let Some(old) = trail_order.pop_front() {
+                        if old != player {
+                            trail.remove(&old);
+                        }
+                    }
+                }
+                core = tron_random_free_cell(state, board_w, board_h, &trail);
+                status = "Core captured. Trail shortened.".to_string();
+                play_sound(state, "score");
+            } else {
+                score += 1;
+            }
+            draw_tron_grid_run(
+                state, board_w, board_h, &trail, player, core, lives, score, collected, goal,
+                &status,
+            );
+            sleep_frame(frame, state.difficulty().tick_ms + 12);
+        }
+        if collected >= goal {
+            score += lives.max(0) as u32 * 150;
+        }
+        record_score(state, "Tron Grid Run", score);
+        let result = if collected >= goal {
+            "Grid route complete."
+        } else {
+            "Grid route failed."
+        };
+        if !wait_menu(
+            state,
+            "Tron Grid Run",
+            &[
+                result.to_string(),
+                format!("Cores: {collected}/{goal}"),
+                format!("Score: {score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn tron_random_free_cell(
+    state: &mut AppState,
+    w: i32,
+    h: i32,
+    blocked: &HashSet<(i32, i32)>,
+) -> (i32, i32) {
+    for _ in 0..400 {
+        let point = (state.rng.range(2, w - 3), state.rng.range(2, h - 3));
+        if !blocked.contains(&point) {
+            return point;
+        }
+    }
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let point = (x, y);
+            if !blocked.contains(&point) {
+                return point;
+            }
+        }
+    }
+    (w / 2, h / 2)
+}
+
+fn draw_tron_grid_run(
+    state: &AppState,
+    board_w: i32,
+    board_h: i32,
+    trail: &HashSet<(i32, i32)>,
+    player: (i32, i32),
+    core: (i32, i32),
+    lives: i32,
+    score: u32,
+    collected: i32,
+    goal: i32,
+    status: &str,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - board_h as usize / 2 + 1;
+    let left = cols / 2 - board_w as usize / 2;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(
+        &mut buf,
+        0,
+        "TRON GRID RUN",
+        &theme,
+        Role::Title,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "Score {score}   Lives {lives}   Cores {collected}/{goal}   WASD steer   P pause   Q menu"
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 1,
+        board_h as usize + 2,
+        board_w as usize + 2,
+        "",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for &(x, y) in trail {
+        put(
+            &mut buf,
+            top + y as usize,
+            left + x as usize,
+            ".",
+            &theme,
+            Role::Secondary,
+            false,
+        );
+    }
+    put(
+        &mut buf,
+        top + core.1 as usize,
+        left + core.0 as usize,
+        "*",
+        &theme,
+        Role::Success,
+        true,
+    );
+    put(
+        &mut buf,
+        top + player.1 as usize,
+        left + player.0 as usize,
+        "@",
+        &theme,
+        Role::Title,
+        true,
+    );
+    center(
+        &mut buf,
+        rows - 2,
+        &trim(status, cols.saturating_sub(4)),
+        &theme,
+        Role::Muted,
+        true,
+        cols,
+    );
+    flush(&buf);
+}
+
 fn game_tetris(state: &mut AppState) {
     if !require_size(state, 24, 58, "Tetris") {
         return;
@@ -16208,6 +17070,25 @@ mod tests {
     }
 
     #[test]
+    fn tron_turns_reject_reverse_and_find_safe_paths() {
+        assert_eq!(
+            tron_turn_dir(TronDir::Right, Key::Char('a')) as u8,
+            TronDir::Right as u8
+        );
+        assert_eq!(
+            tron_turn_dir(TronDir::Right, Key::Char('w')) as u8,
+            TronDir::Up as u8
+        );
+        let mut occupied = HashSet::new();
+        occupied.insert((5, 4));
+        let safe = tron_safe_dirs((5, 5), TronDir::Right, 10, 10, &occupied);
+        assert!(!safe.contains(&TronDir::Left));
+        assert!(!safe.contains(&TronDir::Up));
+        assert!(safe.contains(&TronDir::Right));
+        assert!(safe.contains(&TronDir::Down));
+    }
+
+    #[test]
     fn shared_engine_rule_profiles_are_distinct() {
         assert_distinct(
             "falling profile",
@@ -16317,6 +17198,8 @@ mod tests {
             GameKind::Snake => "snake-growth".to_string(),
             GameKind::Tetris => "falling-polyomino-well".to_string(),
             GameKind::Pong => "paddle-duel".to_string(),
+            GameKind::TronCycles => "hard-light-cycle-duel".to_string(),
+            GameKind::TronGridRun => "solo-fading-trail-core-route".to_string(),
             GameKind::Invaders => "shielded-invader-shooter".to_string(),
             GameKind::Missile => "reticle-city-defense".to_string(),
             GameKind::Breakout => "brick-paddle-breakout".to_string(),
