@@ -33,7 +33,7 @@ struct Difficulty {
     tick_ms: u64,
 }
 
-const DIFFICULTIES: [Difficulty; 3] = [
+const DIFFICULTIES: [Difficulty; 4] = [
     Difficulty {
         name: "Easy",
         description: "Forgiving timing, extra lives, slower enemies.",
@@ -55,7 +55,18 @@ const DIFFICULTIES: [Difficulty; 3] = [
         lives: 3,
         tick_ms: 55,
     },
+    Difficulty {
+        name: "Master",
+        description: "Brutal speed, scarce lives, and almost no recovery room.",
+        speed: 1.55,
+        lives: 2,
+        tick_ms: 42,
+    },
 ];
+
+const PONG_ASSIST_NAMES: [&str; 3] = ["Off", "Light", "Strong"];
+const PONG_SPEED_NAMES: [&str; 3] = ["Calm", "Classic", "Fast"];
+const PONG_SPEED_FACTORS: [f64; 3] = [0.82, 1.0, 1.14];
 
 #[derive(Clone)]
 struct Theme {
@@ -1147,6 +1158,9 @@ const MICRO_GAMES: &[MicroGame] = &[
 
 struct AppState {
     difficulty_index: usize,
+    endless_mode: bool,
+    pong_assist_index: usize,
+    pong_speed_index: usize,
     theme_index: usize,
     glyph_index: usize,
     themes: Vec<Theme>,
@@ -1163,6 +1177,26 @@ struct AppState {
 impl AppState {
     fn difficulty(&self) -> &Difficulty {
         &DIFFICULTIES[self.difficulty_index]
+    }
+
+    fn starting_lives(&self) -> i32 {
+        if self.endless_mode {
+            999
+        } else {
+            self.difficulty().lives
+        }
+    }
+
+    fn pong_assist_name(&self) -> &'static str {
+        PONG_ASSIST_NAMES[self.pong_assist_index % PONG_ASSIST_NAMES.len()]
+    }
+
+    fn pong_speed_name(&self) -> &'static str {
+        PONG_SPEED_NAMES[self.pong_speed_index % PONG_SPEED_NAMES.len()]
+    }
+
+    fn pong_speed_factor(&self) -> f64 {
+        PONG_SPEED_FACTORS[self.pong_speed_index % PONG_SPEED_FACTORS.len()]
     }
 
     fn theme(&self) -> &Theme {
@@ -1268,16 +1302,20 @@ fn run() -> io::Result<()> {
     let glyph_index = load_glyph_index(glyph_sets.len());
     let controls = load_controls();
     sync_controls(controls);
+    let (pong_assist_index, pong_speed_index) = load_pong_options();
     let mut state = AppState {
-        difficulty_index: 1,
+        difficulty_index: load_difficulty_index(),
+        endless_mode: load_endless_mode(),
+        pong_assist_index,
+        pong_speed_index,
         theme_index,
         glyph_index,
         themes,
         glyph_sets,
         app_title: load_app_title(),
         scores: load_scores(),
-        sound_enabled: true,
-        click_effects: true,
+        sound_enabled: load_sound_enabled(),
+        click_effects: load_click_effects(),
         controls,
         rng: Rng::new(),
         last_sound: HashMap::new(),
@@ -1524,6 +1562,26 @@ fn theme_index_path() -> PathBuf {
     home_dir().join(".tui_arcade_theme_index.txt")
 }
 
+fn difficulty_path() -> PathBuf {
+    home_dir().join(".tui_arcade_difficulty.txt")
+}
+
+fn endless_path() -> PathBuf {
+    home_dir().join(".tui_arcade_endless.txt")
+}
+
+fn sound_path() -> PathBuf {
+    home_dir().join(".tui_arcade_sound.txt")
+}
+
+fn click_effects_path() -> PathBuf {
+    home_dir().join(".tui_arcade_click_effects.txt")
+}
+
+fn pong_options_path() -> PathBuf {
+    home_dir().join(".tui_arcade_pong_options.txt")
+}
+
 fn glyph_path() -> PathBuf {
     home_dir().join(".tui_arcade_glyphs.txt")
 }
@@ -1558,6 +1616,85 @@ fn save_theme_index(index: usize) {
 
 fn save_glyph_index(index: usize) {
     let _ = fs::write(glyph_path(), format!("{index}\n"));
+}
+
+fn load_difficulty_index() -> usize {
+    fs::read_to_string(difficulty_path())
+        .ok()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .map(|index| index % DIFFICULTIES.len())
+        .unwrap_or(1)
+}
+
+fn save_difficulty_index(index: usize) {
+    let _ = fs::write(difficulty_path(), format!("{index}\n"));
+}
+
+fn load_bool(path: PathBuf, default: bool) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .map(|text| matches!(text.trim(), "1" | "true" | "on" | "yes"))
+        .unwrap_or(default)
+}
+
+fn save_bool(path: PathBuf, enabled: bool) {
+    let _ = fs::write(path, if enabled { "1\n" } else { "0\n" });
+}
+
+fn load_endless_mode() -> bool {
+    load_bool(endless_path(), false)
+}
+
+fn save_endless_mode(enabled: bool) {
+    save_bool(endless_path(), enabled);
+}
+
+fn load_sound_enabled() -> bool {
+    load_bool(sound_path(), true)
+}
+
+fn save_sound_enabled(enabled: bool) {
+    save_bool(sound_path(), enabled);
+}
+
+fn load_click_effects() -> bool {
+    load_bool(click_effects_path(), true)
+}
+
+fn save_click_effects(enabled: bool) {
+    save_bool(click_effects_path(), enabled);
+}
+
+fn load_pong_options() -> (usize, usize) {
+    let mut assist = 1usize;
+    let mut speed = 0usize;
+    if let Ok(text) = fs::read_to_string(pong_options_path()) {
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            match key {
+                "assist" => {
+                    assist =
+                        value.trim().parse::<usize>().unwrap_or(assist) % PONG_ASSIST_NAMES.len();
+                }
+                "speed" => {
+                    speed = value.trim().parse::<usize>().unwrap_or(speed) % PONG_SPEED_NAMES.len();
+                }
+                _ => {}
+            }
+        }
+    }
+    (assist, speed)
+}
+
+fn save_pong_options(assist: usize, speed: usize) {
+    let text = format!(
+        "assist={}\nspeed={}\n",
+        assist % PONG_ASSIST_NAMES.len(),
+        speed % PONG_SPEED_NAMES.len()
+    );
+    let _ = fs::write(pong_options_path(), text);
 }
 
 fn load_controls() -> Controls {
@@ -2701,7 +2838,11 @@ fn draw_home(state: &AppState, selected: usize) {
         &mut buf,
         top + 3,
         panel_left + 2,
-        &format!("Difficulty: {}", state.difficulty().name),
+        &format!(
+            "Difficulty: {}{}",
+            state.difficulty().name,
+            if state.endless_mode { " + Endless" } else { "" }
+        ),
         &theme,
         Role::Secondary,
         false,
@@ -2728,7 +2869,11 @@ fn draw_home(state: &AppState, selected: usize) {
         &mut buf,
         top + 6,
         panel_left + 2,
-        &format!("Sound: {}", if state.sound_enabled { "on" } else { "off" }),
+        &format!(
+            "Pong: {} assist, {}",
+            state.pong_assist_name(),
+            state.pong_speed_name()
+        ),
         &theme,
         Role::Normal,
         false,
@@ -2736,6 +2881,15 @@ fn draw_home(state: &AppState, selected: usize) {
     put(
         &mut buf,
         top + 7,
+        panel_left + 2,
+        &format!("Sound: {}", if state.sound_enabled { "on" } else { "off" }),
+        &theme,
+        Role::Normal,
+        false,
+    );
+    put(
+        &mut buf,
+        top + 8,
         panel_left + 2,
         &format!(
             "Click FX: {}",
@@ -2747,7 +2901,7 @@ fn draw_home(state: &AppState, selected: usize) {
     );
     put(
         &mut buf,
-        top + 8,
+        top + 9,
         panel_left + 2,
         &format!("Saved scores: {}", state.scores.len()),
         &theme,
@@ -2756,7 +2910,7 @@ fn draw_home(state: &AppState, selected: usize) {
     );
     put(
         &mut buf,
-        top + 10,
+        top + 11,
         panel_left + 2,
         "Enter selects. Q exits.",
         &theme,
@@ -2766,7 +2920,7 @@ fn draw_home(state: &AppState, selected: usize) {
     if panel_h > 13 {
         put(
             &mut buf,
-            top + 11,
+            top + 12,
             panel_left + 2,
             &format!("Screen: {}x{} fullscreen-aware", cols, rows),
             &theme,
@@ -2907,10 +3061,12 @@ fn play_menu(state: &mut AppState) {
                 Key::Left | Key::Char('a') => {
                     state.difficulty_index =
                         (state.difficulty_index + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
+                    save_difficulty_index(state.difficulty_index);
                     dirty = true;
                 }
                 Key::Right | Key::Char('d') => {
                     state.difficulty_index = (state.difficulty_index + 1) % DIFFICULTIES.len();
+                    save_difficulty_index(state.difficulty_index);
                     dirty = true;
                 }
                 Key::Char('t') => {
@@ -3014,8 +3170,9 @@ fn draw_play_menu(
         panel_top - 1,
         &trim(
             &format!(
-                "Difficulty: < {} >   Category: {}   Theme: {}   {}",
+                "Difficulty: < {}{} >   Category: {}   Theme: {}   {}",
                 state.difficulty().name,
+                if state.endless_mode { " Endless" } else { "" },
                 category.name(),
                 format!("{} / {}", state.theme().name, state.glyphs().name),
                 state.difficulty().description
@@ -3301,11 +3458,42 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+const SETTING_DIFFICULTY: usize = 0;
+const SETTING_ENDLESS: usize = 1;
+const SETTING_PONG_ASSIST: usize = 2;
+const SETTING_PONG_SPEED: usize = 3;
+const SETTING_COLOR_THEME: usize = 4;
+const SETTING_GLYPH_SET: usize = 5;
+const SETTING_STARTUP_TITLE: usize = 6;
+const SETTING_TITLE_COLOR: usize = 7;
+const SETTING_ACCENT_COLOR: usize = 8;
+const SETTING_DANGER_COLOR: usize = 9;
+const SETTING_HIGHLIGHT_COLOR: usize = 10;
+const SETTING_BACKGROUND: usize = 11;
+const SETTING_SOUND: usize = 12;
+const SETTING_SOUND_TEST: usize = 13;
+const SETTING_CLICK_EFFECTS: usize = 14;
+const SETTING_CONTROLS: usize = 15;
+const SETTING_ERASE_SCORES: usize = 16;
+const SETTING_BACK: usize = 17;
+
 fn settings_rows(state: &AppState) -> Vec<(String, String)> {
     vec![
         (
             "Difficulty".to_string(),
             state.difficulty().name.to_string(),
+        ),
+        (
+            "Endless mode".to_string(),
+            if state.endless_mode { "on" } else { "off" }.to_string(),
+        ),
+        (
+            "Pong assist".to_string(),
+            state.pong_assist_name().to_string(),
+        ),
+        (
+            "Pong speed".to_string(),
+            state.pong_speed_name().to_string(),
         ),
         ("Color theme".to_string(), state.theme().name.clone()),
         (
@@ -3390,19 +3578,25 @@ fn settings_menu(state: &mut AppState) {
                     settings_adjust(state, selected, 1, &mut message);
                 }
                 Key::Enter | Key::Space => match selected {
-                    0 => settings_adjust(state, selected, 1, &mut message),
-                    1 => settings_adjust(state, selected, 1, &mut message),
-                    2 => settings_adjust(state, selected, 1, &mut message),
-                    3 => {
+                    SETTING_DIFFICULTY | SETTING_ENDLESS | SETTING_PONG_ASSIST
+                    | SETTING_PONG_SPEED | SETTING_COLOR_THEME | SETTING_GLYPH_SET => {
+                        settings_adjust(state, selected, 1, &mut message)
+                    }
+                    SETTING_STARTUP_TITLE => {
                         message = if edit_title_screen(state) {
                             "Startup title saved.".to_string()
                         } else {
                             "Title edit cancelled.".to_string()
                         };
                     }
-                    4..=8 => settings_adjust(state, selected, 1, &mut message),
-                    9 => {
+                    SETTING_TITLE_COLOR
+                    | SETTING_ACCENT_COLOR
+                    | SETTING_DANGER_COLOR
+                    | SETTING_HIGHLIGHT_COLOR
+                    | SETTING_BACKGROUND => settings_adjust(state, selected, 1, &mut message),
+                    SETTING_SOUND => {
                         state.sound_enabled = !state.sound_enabled;
+                        save_sound_enabled(state.sound_enabled);
                         click_effect(state, "sound");
                         message = format!(
                             "Sound {}.",
@@ -3413,12 +3607,13 @@ fn settings_menu(state: &mut AppState) {
                             }
                         );
                     }
-                    10 => {
+                    SETTING_SOUND_TEST => {
                         play_sound(state, "score");
                         message = "Played a macOS sound test.".to_string();
                     }
-                    11 => {
+                    SETTING_CLICK_EFFECTS => {
                         state.click_effects = !state.click_effects;
+                        save_click_effects(state.click_effects);
                         click_effect(state, "click fx");
                         message = format!(
                             "Click effects {}.",
@@ -3429,11 +3624,11 @@ fn settings_menu(state: &mut AppState) {
                             }
                         );
                     }
-                    12 => {
+                    SETTING_CONTROLS => {
                         controls_menu(state);
                         message = "Controls updated.".to_string();
                     }
-                    13 => {
+                    SETTING_ERASE_SCORES => {
                         if confirm_dialog(
                             state,
                             "ERASE SCORES?",
@@ -3452,7 +3647,7 @@ fn settings_menu(state: &mut AppState) {
                             message = "Score erase cancelled.".to_string();
                         }
                     }
-                    14 => {
+                    SETTING_BACK => {
                         click_effect(state, "back");
                         return;
                     }
@@ -3472,48 +3667,73 @@ fn settings_menu(state: &mut AppState) {
 
 fn settings_adjust(state: &mut AppState, selected: usize, delta: i32, message: &mut String) {
     match selected {
-        0 => {
+        SETTING_DIFFICULTY => {
             state.difficulty_index = wrap_index(state.difficulty_index, DIFFICULTIES.len(), delta);
-            *message = "Difficulty changed.".to_string();
+            save_difficulty_index(state.difficulty_index);
+            *message = format!("Difficulty set to {}.", state.difficulty().name);
         }
-        1 => {
+        SETTING_ENDLESS => {
+            state.endless_mode = !state.endless_mode;
+            save_endless_mode(state.endless_mode);
+            *message = format!(
+                "Endless mode {}.",
+                if state.endless_mode {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+        }
+        SETTING_PONG_ASSIST => {
+            state.pong_assist_index =
+                wrap_index(state.pong_assist_index, PONG_ASSIST_NAMES.len(), delta);
+            save_pong_options(state.pong_assist_index, state.pong_speed_index);
+            *message = format!("Pong assist set to {}.", state.pong_assist_name());
+        }
+        SETTING_PONG_SPEED => {
+            state.pong_speed_index =
+                wrap_index(state.pong_speed_index, PONG_SPEED_NAMES.len(), delta);
+            save_pong_options(state.pong_assist_index, state.pong_speed_index);
+            *message = format!("Pong speed set to {}.", state.pong_speed_name());
+        }
+        SETTING_COLOR_THEME => {
             state.theme_index = wrap_index(state.theme_index, state.themes.len(), delta);
             save_theme_index(state.theme_index);
             *message = "Color theme changed.".to_string();
         }
-        2 => {
+        SETTING_GLYPH_SET => {
             state.glyph_index = wrap_index(state.glyph_index, state.glyph_sets.len(), delta);
             save_glyph_index(state.glyph_index);
             *message = "Glyph set changed independently of colors.".to_string();
         }
-        3 => {
+        SETTING_STARTUP_TITLE => {
             *message = "Press Enter to edit the startup title.".to_string();
         }
-        4 => {
+        SETTING_TITLE_COLOR => {
             let theme = state.custom_theme_mut();
             theme.title = wrap_color(theme.title, delta);
             save_custom_theme(theme);
             *message = "Custom title color saved.".to_string();
         }
-        5 => {
+        SETTING_ACCENT_COLOR => {
             let theme = state.custom_theme_mut();
             theme.accent = wrap_color(theme.accent, delta);
             save_custom_theme(theme);
             *message = "Custom accent color saved.".to_string();
         }
-        6 => {
+        SETTING_DANGER_COLOR => {
             let theme = state.custom_theme_mut();
             theme.danger = wrap_color(theme.danger, delta);
             save_custom_theme(theme);
             *message = "Custom danger color saved.".to_string();
         }
-        7 => {
+        SETTING_HIGHLIGHT_COLOR => {
             let theme = state.custom_theme_mut();
             theme.highlight = wrap_color(theme.highlight, delta);
             save_custom_theme(theme);
             *message = "Custom highlight color saved.".to_string();
         }
-        8 => {
+        SETTING_BACKGROUND => {
             let theme = state.custom_theme_mut();
             let next = match theme.bg {
                 None if delta >= 0 => Some(0),
@@ -3531,7 +3751,7 @@ fn settings_adjust(state: &mut AppState, selected: usize, delta: i32, message: &
             save_custom_theme(theme);
             *message = "Custom background saved.".to_string();
         }
-        12 => {
+        SETTING_CONTROLS => {
             *message = "Press Enter to edit controls.".to_string();
         }
         _ => {}
@@ -7715,7 +7935,7 @@ fn game_micro_quest(state: &mut AppState, name: &str, kind: QuestKind) {
         let mut next_node = 1i32;
         let mut resource = rules.resource_start;
         let mut lives = if rules.lives_enabled {
-            state.difficulty().lives
+            state.starting_lives()
         } else {
             1
         };
@@ -8497,7 +8717,7 @@ fn game_micro_lane(state: &mut AppState, name: &str, kind: LaneKind) {
         let track_h = 14i32;
         let mut player_lane = 2usize;
         let mut objects: Vec<(usize, f64, bool)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut collected = 0u32;
         let target = rules.target + state.difficulty_index as u32;
@@ -8945,7 +9165,7 @@ fn game_micro_catch(state: &mut AppState, name: &str, kind: CatchKind) {
         let (w, h) = full_board(48, 16, 112, 34);
         let mut player_x = w / 2;
         let mut objects: Vec<(i32, f64, bool)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut caught = 0u32;
         let mut recipe = 0usize;
@@ -9786,34 +10006,69 @@ fn game_pong(state: &mut AppState) {
     }
     loop {
         let (board_w, board_h) = full_board(60, 17, 132, 38);
-        let paddle_h = match state.difficulty_index {
-            0 => 7,
-            1 => 6,
-            _ => 5,
+        let (player_paddle_h, ai_paddle_h) = match state.difficulty_index {
+            0 => (9, 4),
+            1 => (8, 5),
+            2 => (7, 5),
+            _ => (6, 6),
         };
-        let mut player_y = board_h / 2 - paddle_h / 2;
-        let mut ai_y = player_y;
+        let mut player_y = board_h / 2 - player_paddle_h / 2;
+        let mut ai_y = board_h / 2 - ai_paddle_h / 2;
         let mut ball_x = board_w as f64 / 2.0;
         let mut ball_y = board_h as f64 / 2.0;
+        let speed_factor = state.pong_speed_factor();
         let mut vel_x = match state.difficulty_index {
-            0 => 0.60,
-            1 => 0.78,
-            _ => 0.96,
-        };
+            0 => 0.46,
+            1 => 0.58,
+            2 => 0.70,
+            _ => 0.82,
+        } * speed_factor;
         let mut vel_y = match state.difficulty_index {
-            0 => 0.30,
-            1 => 0.38,
-            _ => 0.48,
+            0 => 0.22,
+            1 => 0.28,
+            2 => 0.34,
+            _ => 0.40,
+        } * speed_factor;
+        let max_ball_speed = match state.difficulty_index {
+            0 => 0.92,
+            1 => 1.04,
+            2 => 1.18,
+            _ => 1.32,
+        } * speed_factor;
+        let player_step = match state.pong_assist_index {
+            0 => 2,
+            1 => 3,
+            _ => 4,
+        };
+        let player_hit_pad = state.pong_assist_index as i32;
+        let ai_reaction = match state.difficulty_index {
+            0 => 5,
+            1 => 4,
+            2 => 3,
+            _ => 2,
+        };
+        let ai_error = match state.difficulty_index {
+            0 => 4,
+            1 => 3,
+            2 => 2,
+            _ => 1,
+        };
+        let ai_step = match state.difficulty_index {
+            0 | 1 => 1,
+            _ => 2,
         };
         let mut player_score = 0;
         let mut ai_score = 0;
-        let win_score = 5;
+        let win_score = if state.endless_mode { 99 } else { 5 };
+        let mut tick = 0u32;
         while player_score < win_score && ai_score < win_score {
             let frame = Instant::now();
             while let Some(key) = read_key() {
                 match key {
-                    Key::Up | Key::Char('w') => player_y = (player_y - 2).max(0),
-                    Key::Down | Key::Char('s') => player_y = (player_y + 2).min(board_h - paddle_h),
+                    Key::Up | Key::Char('w') => player_y = (player_y - player_step).max(0),
+                    Key::Down | Key::Char('s') => {
+                        player_y = (player_y + player_step).min(board_h - player_paddle_h)
+                    }
                     _ if is_pause(key) => {
                         if pause_screen(state).is_none() {
                             return;
@@ -9823,12 +10078,25 @@ fn game_pong(state: &mut AppState) {
                     _ => {}
                 }
             }
-            let target = ball_y.round() as i32 - paddle_h / 2 + state.rng.range(-1, 1);
-            let ai_step = if state.difficulty_index == 0 { 1 } else { 2 };
-            if ai_y + paddle_h / 2 < target {
-                ai_y = (ai_y + ai_step).min(board_h - paddle_h);
-            } else if ai_y + paddle_h / 2 > target {
-                ai_y = (ai_y - ai_step).max(0);
+            tick += 1;
+            if state.pong_assist_index > 0 && vel_x < 0.0 && ball_x < board_w as f64 * 0.58 {
+                let player_center = player_y + player_paddle_h / 2;
+                let target = ball_y.round() as i32;
+                let assist_step = state.pong_assist_index as i32;
+                if player_center < target {
+                    player_y = (player_y + assist_step).min(board_h - player_paddle_h);
+                } else if player_center > target {
+                    player_y = (player_y - assist_step).max(0);
+                }
+            }
+            if tick % ai_reaction == 0 {
+                let target =
+                    ball_y.round() as i32 - ai_paddle_h / 2 + state.rng.range(-ai_error, ai_error);
+                if ai_y + ai_paddle_h / 2 < target {
+                    ai_y = (ai_y + ai_step).min(board_h - ai_paddle_h);
+                } else if ai_y + ai_paddle_h / 2 > target {
+                    ai_y = (ai_y - ai_step).max(0);
+                }
             }
             ball_x += vel_x;
             ball_y += vel_y;
@@ -9838,14 +10106,23 @@ fn game_pong(state: &mut AppState) {
                 play_sound(state, "wall");
             }
             let by = ball_y.round() as i32;
-            if ball_x <= 2.0 && vel_x < 0.0 && by >= player_y && by < player_y + paddle_h {
-                vel_x = vel_x.abs().min(1.35) + 0.04;
-                vel_y += ((by - player_y) as f64 / paddle_h as f64 - 0.5) * 0.30;
+            if ball_x <= 2.0
+                && vel_x < 0.0
+                && by >= player_y - player_hit_pad
+                && by < player_y + player_paddle_h + player_hit_pad
+            {
+                vel_x = (vel_x.abs() + 0.025).min(max_ball_speed);
+                let hit_y = by.clamp(player_y, player_y + player_paddle_h - 1);
+                vel_y += ((hit_y - player_y) as f64 / player_paddle_h as f64 - 0.5) * 0.26;
                 play_sound(state, "paddle");
             }
-            if ball_x >= (board_w - 3) as f64 && vel_x > 0.0 && by >= ai_y && by < ai_y + paddle_h {
-                vel_x = -vel_x.abs().min(1.35) - 0.04;
-                vel_y += ((by - ai_y) as f64 / paddle_h as f64 - 0.5) * 0.30;
+            if ball_x >= (board_w - 3) as f64
+                && vel_x > 0.0
+                && by >= ai_y
+                && by < ai_y + ai_paddle_h
+            {
+                vel_x = -((vel_x.abs() + 0.018).min(max_ball_speed * 0.96));
+                vel_y += ((by - ai_y) as f64 / ai_paddle_h as f64 - 0.5) * 0.22;
                 play_sound(state, "paddle");
             }
             if ball_x < 0.0 {
@@ -9859,6 +10136,7 @@ fn game_pong(state: &mut AppState) {
                     board_w,
                     board_h,
                     true,
+                    speed_factor,
                 );
             } else if ball_x >= board_w as f64 {
                 player_score += 1;
@@ -9871,19 +10149,22 @@ fn game_pong(state: &mut AppState) {
                     board_w,
                     board_h,
                     false,
+                    speed_factor,
                 );
             }
             draw_pong(
                 state,
                 board_w,
                 board_h,
-                paddle_h,
+                player_paddle_h,
+                ai_paddle_h,
                 player_y,
                 ai_y,
                 ball_x,
                 ball_y,
                 player_score,
                 ai_score,
+                win_score,
             );
             sleep_frame(frame, state.difficulty().tick_ms);
         }
@@ -9900,6 +10181,11 @@ fn game_pong(state: &mut AppState) {
             &[
                 result.to_string(),
                 format!("Final score: {player_score}-{ai_score}"),
+                format!(
+                    "Assist: {}   Speed: {}",
+                    state.pong_assist_name(),
+                    state.pong_speed_name()
+                ),
             ],
             true,
         ) {
@@ -9916,24 +10202,31 @@ fn reset_pong_ball(
     w: i32,
     h: i32,
     right: bool,
+    speed_factor: f64,
 ) {
     *ball_x = w as f64 / 2.0;
     *ball_y = h as f64 / 2.0;
     *vel_x = if right { vel_x.abs() } else { -vel_x.abs() };
-    *vel_y = if *vel_y >= 0.0 { 0.36 } else { -0.36 };
+    *vel_y = if *vel_y >= 0.0 {
+        0.28 * speed_factor
+    } else {
+        -0.28 * speed_factor
+    };
 }
 
 fn draw_pong(
     state: &AppState,
     board_w: i32,
     board_h: i32,
-    paddle_h: i32,
+    player_paddle_h: i32,
+    ai_paddle_h: i32,
     player_y: i32,
     ai_y: i32,
     ball_x: f64,
     ball_y: f64,
     player_score: i32,
     ai_score: i32,
+    win_score: i32,
 ) {
     let (rows, cols) = terminal_size();
     let theme = state.theme().clone();
@@ -9945,7 +10238,11 @@ fn draw_pong(
     center(
         &mut buf,
         1,
-        &format!("You {player_score}   CPU {ai_score}   fast ball   W/S move   Q menu"),
+        &format!(
+            "You {player_score}   CPU {ai_score}   Target {win_score}   Assist {}   Speed {}   W/S move",
+            state.pong_assist_name(),
+            state.pong_speed_name()
+        ),
         &theme,
         Role::Accent,
         false,
@@ -9975,7 +10272,7 @@ fn draw_pong(
             );
         }
     }
-    for offset in 0..paddle_h {
+    for offset in 0..player_paddle_h {
         put(
             &mut buf,
             top + (player_y + offset) as usize,
@@ -9985,6 +10282,8 @@ fn draw_pong(
             Role::Secondary,
             true,
         );
+    }
+    for offset in 0..ai_paddle_h {
         put(
             &mut buf,
             top + (ai_y + offset) as usize,
@@ -10303,7 +10602,7 @@ fn game_breakout(state: &mut AppState) {
         let mut ball_y = board_h as f64 - 4.0;
         let mut vel_x = 0.42 * state.difficulty().speed;
         let mut vel_y = -0.36 * state.difficulty().speed;
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut bricks = HashSet::new();
         for y in 1..5 {
@@ -11150,7 +11449,7 @@ fn falling_game(
         let (board_w, board_h) = full_board(52, 17, 132, 38);
         let mut player = (board_w / 2, board_h - 2);
         let mut objects: Vec<(i32, f64, bool)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut combo = 1u32;
         let mut cargo = 0i32;
@@ -11423,7 +11722,7 @@ fn game_racer(state: &mut AppState) {
             .collect();
         let mut player_lane = 1usize;
         let mut obstacles: Vec<(usize, f64)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut last_spawn = Instant::now();
         while lives > 0 {
@@ -11577,7 +11876,7 @@ fn game_flappy(state: &mut AppState) {
         let mut player_y = board_h / 2;
         let mut gates: Vec<(f64, i32)> =
             vec![(board_w as f64 - 2.0, state.rng.range(4, board_h - 5))];
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         while lives > 0 {
             let frame = Instant::now();
@@ -11883,7 +12182,7 @@ fn game_side_scroll(
         let (board_w, board_h) = full_board(58, 17, 132, 38);
         let mut player = (8, board_h / 2);
         let mut objects: Vec<(f64, i32, bool)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut fuel = 80i32;
         let mut heat = 0i32;
@@ -12191,7 +12490,7 @@ fn game_frog(state: &mut AppState) {
         let (board_w, board_h) = full_board(50, 15, 118, 34);
         let mut frog = (board_w / 2, board_h - 1);
         let mut tick = 0i32;
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let lanes: Vec<i32> = (3..(board_h - 2)).step_by(2).collect();
         while lives > 0 {
@@ -12726,7 +13025,7 @@ fn game_bug_hunt(state: &mut AppState) {
         .collect();
         let mut score = 0u32;
         let mut misses = 0u32;
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let max_swarm = match state.difficulty_index {
             0 => 18,
             1 => 15,
@@ -12903,7 +13202,7 @@ fn game_coin(state: &mut AppState) {
                 _ => 10,
             },
         );
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         while lives > 0 && !coins.is_empty() {
             let frame = Instant::now();
@@ -13679,7 +13978,7 @@ fn game_byte_blaster(state: &mut AppState) {
         let mut bytes: Vec<(i32, f64, char)> = Vec::new();
         let mut score = 0u32;
         let mut streak = 0u32;
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut last_spawn = Instant::now();
         while lives > 0 {
             let frame = Instant::now();
@@ -13719,7 +14018,7 @@ fn game_byte_blaster(state: &mut AppState) {
             {
                 let ch = keys[state.rng.usize(keys.len())];
                 bytes.push((state.rng.range(2, board_w - 3), 1.0, ch));
-                if state.difficulty_index == 2 && state.rng.chance(1, 4) {
+                if state.difficulty_index >= 2 && state.rng.chance(1, 4) {
                     let ch = keys[state.rng.usize(keys.len())];
                     bytes.push((state.rng.range(2, board_w - 3), 1.0, ch));
                 }
@@ -14033,7 +14332,7 @@ fn game_laser(state: &mut AppState) {
         let mut player_x = board_w / 2;
         let mut shots: Vec<(i32, i32)> = Vec::new();
         let mut blocks: Vec<(i32, f64)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut last_spawn = Instant::now();
         while lives > 0 {
@@ -14575,10 +14874,10 @@ fn game_number(state: &mut AppState) {
         while Instant::now() < end_at {
             let a = state
                 .rng
-                .range(2, if state.difficulty_index == 2 { 30 } else { 18 });
+                .range(2, if state.difficulty_index >= 2 { 30 } else { 18 });
             let b = state
                 .rng
-                .range(2, if state.difficulty_index == 2 { 20 } else { 12 });
+                .range(2, if state.difficulty_index >= 2 { 20 } else { 12 });
             let op = state.rng.usize(3);
             let (prompt, answer) = match op {
                 0 => (format!("{a} + {b} ="), a + b),
@@ -14722,7 +15021,7 @@ fn game_orbit(state: &mut AppState) {
         ];
         let mut guard = 0usize;
         let mut sparks: Vec<(f64, f64, f64, f64)> = Vec::new();
-        let mut lives = state.difficulty().lives;
+        let mut lives = state.starting_lives();
         let mut score = 0u32;
         let mut last_spawn = Instant::now();
         while lives > 0 {
@@ -14932,6 +15231,19 @@ mod tests {
                 game.name
             );
         }
+    }
+
+    #[test]
+    fn master_difficulty_and_pong_options_exist() {
+        let master = DIFFICULTIES
+            .last()
+            .expect("difficulty list should not be empty");
+        assert_eq!(master.name, "Master");
+        assert!(master.speed > DIFFICULTIES[2].speed);
+        assert!(master.tick_ms < DIFFICULTIES[2].tick_ms);
+        assert!(master.lives < DIFFICULTIES[2].lives);
+        assert_eq!(PONG_ASSIST_NAMES, ["Off", "Light", "Strong"]);
+        assert_eq!(PONG_SPEED_NAMES, ["Calm", "Classic", "Fast"]);
     }
 
     #[test]

@@ -36,6 +36,8 @@ Library tools:
 Settings includes:
 
 - Difficulty
+- Endless mode for very long runs
+- Pong assist and Pong speed tuning
 - Color theme preset
 - Glyph set preset for borders, menu markers, scroll bars, and buttons
 - Startup title text
@@ -73,5 +75,7 @@ Theme Lab:
 - R randomizes the custom theme
 
 Scores save to `~/.tui_arcade_scores.json`. Custom Rust theme colors save to `~/.tui_arcade_theme_rust.txt`, and the selected color theme saves to `~/.tui_arcade_theme_index.txt`. The selected glyph set saves to `~/.tui_arcade_glyphs.txt`. The startup title saves to `~/.tui_arcade_title.txt`. Rebound controls save to `~/.tui_arcade_controls.txt`.
+
+Difficulty, Endless mode, sound/click toggles, and Pong tuning also persist between launches. Master difficulty is available for faster, lower-life runs.
 
 Sound uses the terminal bell plus macOS `afplay` system sounds for clicks, hits, wall bounces, alerts, and scoring.
