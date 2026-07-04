@@ -246,6 +246,8 @@ enum GameKind {
     StormSurge,
     CrystalCavern,
     TicTacToe,
+    Chess,
+    Checkers,
     Micro(usize),
 }
 
@@ -610,6 +612,16 @@ const GAMES: &[GameInfo] = &[
         name: "Tic Tac Toe",
         summary: "Classic 3x3 X/O duel against a blocking CPU.",
         kind: GameKind::TicTacToe,
+    },
+    GameInfo {
+        name: "Chess",
+        summary: "Play white in a real chess board with legal piece movement and a CPU reply.",
+        kind: GameKind::Chess,
+    },
+    GameInfo {
+        name: "Checkers",
+        summary: "Jump, crown kings, and clear the board in a CPU checkers duel.",
+        kind: GameKind::Checkers,
     },
     GameInfo {
         name: "Connect Four",
@@ -2953,6 +2965,7 @@ fn game_category(game: &GameInfo) -> GameCategory {
         | GameKind::IceSlide
         | GameKind::SignalTrace
         | GameKind::TicTacToe => GameCategory::Puzzle,
+        GameKind::Chess | GameKind::Checkers => GameCategory::Strategy,
         GameKind::Pong
         | GameKind::Breakout
         | GameKind::Meteor
@@ -4665,6 +4678,8 @@ fn play_game(state: &mut AppState, game: &GameInfo) {
         ),
         GameKind::CrystalCavern => grid_exit_game(state, "Crystal Cavern", false, false),
         GameKind::TicTacToe => game_tic_tac_toe(state),
+        GameKind::Chess => game_chess(state),
+        GameKind::Checkers => game_checkers(state),
         GameKind::Micro(index) => {
             if let Some(spec) = MICRO_GAMES.get(index) {
                 play_micro_game(state, game.name, *spec);
@@ -4906,6 +4921,854 @@ fn draw_tic_tac_toe(state: &AppState, board: &[char; 9], cursor: usize, message:
         &theme,
         Role::Secondary,
         true,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_chess(state: &mut AppState) {
+    if !require_size(state, 24, 78, "Chess") {
+        return;
+    }
+    loop {
+        let mut board = chess_initial_board();
+        let mut cursor = chess_idx(4, 6);
+        let mut selected = None;
+        let mut player_captures = 0u32;
+        let mut cpu_captures = 0u32;
+        let mut ply = 0u32;
+        let mut message = "White to move. Select a piece, then a destination.".to_string();
+        let mut result = None;
+        while result.is_none() {
+            draw_chess(
+                state,
+                &board,
+                cursor,
+                selected,
+                &message,
+                player_captures,
+                cpu_captures,
+            );
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 8 => cursor -= 8,
+                    Key::Down | Key::Char('s') if cursor < 56 => cursor += 8,
+                    Key::Left | Key::Char('a') if cursor % 8 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 8 < 7 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        if let Some(from) = selected {
+                            if from == cursor {
+                                selected = None;
+                                message = "Selection cleared.".to_string();
+                                continue;
+                            }
+                            if chess_legal_move(&board, from, cursor, true) {
+                                let captured = board[cursor];
+                                board = chess_make_move(board, from, cursor);
+                                if captured != '.' {
+                                    player_captures += chess_piece_value(captured) as u32;
+                                }
+                                ply += 1;
+                                selected = None;
+                                play_sound(state, "score");
+                                let black_moves = chess_all_legal_moves(&board, false);
+                                if black_moves.is_empty() {
+                                    result = Some(if chess_in_check(&board, false) {
+                                        "Checkmate. You won.".to_string()
+                                    } else {
+                                        "Stalemate. No legal CPU move.".to_string()
+                                    });
+                                    continue;
+                                }
+                                if let Some((cpu_from, cpu_to)) = chess_pick_cpu_move(state, &board)
+                                {
+                                    let cpu_capture = board[cpu_to];
+                                    board = chess_make_move(board, cpu_from, cpu_to);
+                                    if cpu_capture != '.' {
+                                        cpu_captures += chess_piece_value(cpu_capture) as u32;
+                                        play_sound(state, "alert");
+                                    } else {
+                                        play_sound(state, "paddle");
+                                    }
+                                    ply += 1;
+                                    let white_moves = chess_all_legal_moves(&board, true);
+                                    if white_moves.is_empty() {
+                                        result = Some(if chess_in_check(&board, true) {
+                                            "Checkmate. CPU won.".to_string()
+                                        } else {
+                                            "Stalemate. No legal white move.".to_string()
+                                        });
+                                    } else if chess_in_check(&board, true) {
+                                        message = "CPU moved. You are in check.".to_string();
+                                    } else {
+                                        message = "CPU moved. White to move.".to_string();
+                                    }
+                                }
+                            } else {
+                                message = "Illegal chess move.".to_string();
+                                play_sound(state, "wall");
+                            }
+                        } else if chess_is_white_piece(board[cursor]) {
+                            selected = Some(cursor);
+                            message = "Piece selected. Choose a legal destination.".to_string();
+                        } else {
+                            message = "Select one of your white pieces.".to_string();
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let result = result.unwrap_or_else(|| "Board ended.".to_string());
+        draw_chess(
+            state,
+            &board,
+            cursor,
+            selected,
+            &result,
+            player_captures,
+            cpu_captures,
+        );
+        let score = 300u32
+            .saturating_add(player_captures * 35)
+            .saturating_sub(cpu_captures * 25)
+            .saturating_sub(ply * 2);
+        record_score(state, "Chess", score);
+        if !wait_menu(
+            state,
+            "Chess",
+            &[
+                result,
+                format!("Material score: {player_captures}-{cpu_captures}"),
+                format!("Score: {score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn chess_initial_board() -> [char; 64] {
+    let mut board = ['.'; 64];
+    let back = ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'];
+    for x in 0..8 {
+        board[chess_idx(x, 0)] = back[x];
+        board[chess_idx(x, 1)] = 'p';
+        board[chess_idx(x, 6)] = 'P';
+        board[chess_idx(x, 7)] = back[x].to_ascii_uppercase();
+    }
+    board
+}
+
+fn chess_idx(x: usize, y: usize) -> usize {
+    y * 8 + x
+}
+
+fn chess_xy(index: usize) -> (i32, i32) {
+    ((index % 8) as i32, (index / 8) as i32)
+}
+
+fn chess_is_white_piece(piece: char) -> bool {
+    piece.is_ascii_uppercase()
+}
+
+fn chess_is_black_piece(piece: char) -> bool {
+    piece.is_ascii_lowercase()
+}
+
+fn chess_same_color(a: char, b: char) -> bool {
+    (chess_is_white_piece(a) && chess_is_white_piece(b))
+        || (chess_is_black_piece(a) && chess_is_black_piece(b))
+}
+
+fn chess_piece_value(piece: char) -> i32 {
+    match piece.to_ascii_lowercase() {
+        'p' => 1,
+        'n' | 'b' => 3,
+        'r' => 5,
+        'q' => 9,
+        'k' => 20,
+        _ => 0,
+    }
+}
+
+fn chess_make_move(mut board: [char; 64], from: usize, to: usize) -> [char; 64] {
+    let mut piece = board[from];
+    board[from] = '.';
+    let (_, to_y) = chess_xy(to);
+    if piece == 'P' && to_y == 0 {
+        piece = 'Q';
+    } else if piece == 'p' && to_y == 7 {
+        piece = 'q';
+    }
+    board[to] = piece;
+    board
+}
+
+fn chess_legal_move(board: &[char; 64], from: usize, to: usize, white_turn: bool) -> bool {
+    if from == to || from >= 64 || to >= 64 {
+        return false;
+    }
+    let piece = board[from];
+    if piece == '.' {
+        return false;
+    }
+    if white_turn != chess_is_white_piece(piece) {
+        return false;
+    }
+    let target = board[to];
+    if target != '.' && chess_same_color(piece, target) {
+        return false;
+    }
+    if target.to_ascii_lowercase() == 'k' {
+        return false;
+    }
+    if !chess_piece_shape_legal(board, from, to, piece, target) {
+        return false;
+    }
+    let next = chess_make_move(*board, from, to);
+    !chess_in_check(&next, white_turn)
+}
+
+fn chess_piece_shape_legal(
+    board: &[char; 64],
+    from: usize,
+    to: usize,
+    piece: char,
+    target: char,
+) -> bool {
+    let (fx, fy) = chess_xy(from);
+    let (tx, ty) = chess_xy(to);
+    let dx = tx - fx;
+    let dy = ty - fy;
+    match piece.to_ascii_lowercase() {
+        'p' => {
+            let dir = if chess_is_white_piece(piece) { -1 } else { 1 };
+            let start_row = if chess_is_white_piece(piece) { 6 } else { 1 };
+            if dx == 0 && dy == dir && target == '.' {
+                return true;
+            }
+            if dx == 0 && dy == dir * 2 && fy == start_row && target == '.' {
+                let mid = chess_idx(fx as usize, (fy + dir) as usize);
+                return board[mid] == '.';
+            }
+            dy == dir && dx.abs() == 1 && target != '.'
+        }
+        'n' => (dx.abs() == 1 && dy.abs() == 2) || (dx.abs() == 2 && dy.abs() == 1),
+        'b' => dx.abs() == dy.abs() && chess_path_clear(board, fx, fy, tx, ty),
+        'r' => (dx == 0 || dy == 0) && chess_path_clear(board, fx, fy, tx, ty),
+        'q' => {
+            (dx == 0 || dy == 0 || dx.abs() == dy.abs()) && chess_path_clear(board, fx, fy, tx, ty)
+        }
+        'k' => dx.abs() <= 1 && dy.abs() <= 1,
+        _ => false,
+    }
+}
+
+fn chess_path_clear(board: &[char; 64], fx: i32, fy: i32, tx: i32, ty: i32) -> bool {
+    let step_x = (tx - fx).signum();
+    let step_y = (ty - fy).signum();
+    let mut x = fx + step_x;
+    let mut y = fy + step_y;
+    while (x, y) != (tx, ty) {
+        if board[chess_idx(x as usize, y as usize)] != '.' {
+            return false;
+        }
+        x += step_x;
+        y += step_y;
+    }
+    true
+}
+
+fn chess_in_check(board: &[char; 64], white_king: bool) -> bool {
+    let king = if white_king { 'K' } else { 'k' };
+    let Some(king_index) = board.iter().position(|&piece| piece == king) else {
+        return true;
+    };
+    chess_square_attacked(board, king_index, !white_king)
+}
+
+fn chess_square_attacked(board: &[char; 64], square: usize, by_white: bool) -> bool {
+    let (tx, ty) = chess_xy(square);
+    for from in 0..64 {
+        let piece = board[from];
+        if piece == '.' || chess_is_white_piece(piece) != by_white {
+            continue;
+        }
+        let (fx, fy) = chess_xy(from);
+        let dx = tx - fx;
+        let dy = ty - fy;
+        let attacks = match piece.to_ascii_lowercase() {
+            'p' => {
+                let dir = if by_white { -1 } else { 1 };
+                dy == dir && dx.abs() == 1
+            }
+            'n' => (dx.abs() == 1 && dy.abs() == 2) || (dx.abs() == 2 && dy.abs() == 1),
+            'b' => dx.abs() == dy.abs() && chess_path_clear(board, fx, fy, tx, ty),
+            'r' => (dx == 0 || dy == 0) && chess_path_clear(board, fx, fy, tx, ty),
+            'q' => {
+                (dx == 0 || dy == 0 || dx.abs() == dy.abs())
+                    && chess_path_clear(board, fx, fy, tx, ty)
+            }
+            'k' => dx.abs() <= 1 && dy.abs() <= 1,
+            _ => false,
+        };
+        if attacks {
+            return true;
+        }
+    }
+    false
+}
+
+fn chess_all_legal_moves(board: &[char; 64], white_turn: bool) -> Vec<(usize, usize)> {
+    let mut moves = Vec::new();
+    for from in 0..64 {
+        let piece = board[from];
+        if piece == '.' || chess_is_white_piece(piece) != white_turn {
+            continue;
+        }
+        for to in 0..64 {
+            if chess_legal_move(board, from, to, white_turn) {
+                moves.push((from, to));
+            }
+        }
+    }
+    moves
+}
+
+fn chess_pick_cpu_move(state: &mut AppState, board: &[char; 64]) -> Option<(usize, usize)> {
+    let moves = chess_all_legal_moves(board, false);
+    if moves.is_empty() {
+        return None;
+    }
+    let mut best_score = i32::MIN;
+    let mut best_moves = Vec::new();
+    for (from, to) in moves {
+        let mut score = chess_piece_value(board[to]) * 10;
+        let next = chess_make_move(*board, from, to);
+        if chess_in_check(&next, true) {
+            score += 8;
+        }
+        let (x, y) = chess_xy(to);
+        score += 4 - (x - 3).abs().min(4);
+        score += 4 - (y - 3).abs().min(4);
+        score += state.rng.range(0, 2);
+        if score > best_score {
+            best_score = score;
+            best_moves.clear();
+            best_moves.push((from, to));
+        } else if score == best_score {
+            best_moves.push((from, to));
+        }
+    }
+    Some(best_moves[state.rng.usize(best_moves.len())])
+}
+
+fn draw_chess(
+    state: &AppState,
+    board: &[char; 64],
+    cursor: usize,
+    selected: Option<usize>,
+    message: &str,
+    player_captures: u32,
+    cpu_captures: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 6;
+    let left = cols / 2 - 17;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "CHESS", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!(
+            "White pieces uppercase   Captures {player_captures}-{cpu_captures}   Enter select/move"
+        ),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 4,
+        12,
+        39,
+        "BOARD",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for y in 0..8 {
+        put(
+            &mut buf,
+            top + y,
+            left - 2,
+            &(8 - y).to_string(),
+            &theme,
+            Role::Muted,
+            false,
+        );
+        for x in 0..8 {
+            let index = chess_idx(x, y);
+            let piece = board[index];
+            let shown = if piece == '.' { "." } else { "" };
+            let text = if piece == '.' {
+                format!(" {shown} ")
+            } else {
+                format!(" {piece} ")
+            };
+            let role = if Some(index) == selected {
+                Role::Highlight
+            } else if chess_is_white_piece(piece) {
+                Role::Success
+            } else if chess_is_black_piece(piece) {
+                Role::Danger
+            } else if (x + y) % 2 == 0 {
+                Role::Muted
+            } else {
+                Role::Normal
+            };
+            if index == cursor {
+                put_inv(
+                    &mut buf,
+                    top + y,
+                    left + x * 4,
+                    &text,
+                    &theme,
+                    Role::Highlight,
+                );
+            } else {
+                put(
+                    &mut buf,
+                    top + y,
+                    left + x * 4,
+                    &text,
+                    &theme,
+                    role,
+                    piece != '.' || Some(index) == selected,
+                );
+            }
+        }
+    }
+    put(
+        &mut buf,
+        top + 9,
+        left,
+        "  a   b   c   d   e   f   g   h",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    center(
+        &mut buf,
+        top + 11,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        top + 13,
+        "No castling or en passant; pawns promote to queens.",
+        &theme,
+        Role::Muted,
+        false,
+        cols,
+    );
+    flush(&buf);
+}
+
+fn game_checkers(state: &mut AppState) {
+    if !require_size(state, 24, 78, "Checkers") {
+        return;
+    }
+    loop {
+        let mut board = checkers_initial_board();
+        let mut cursor = checkers_idx(1, 5);
+        let mut selected = None;
+        let mut player_captures = 0u32;
+        let mut cpu_captures = 0u32;
+        let mut message = "White to move. Captures are mandatory.".to_string();
+        let mut result = None;
+        while result.is_none() {
+            draw_checkers(
+                state,
+                &board,
+                cursor,
+                selected,
+                &message,
+                player_captures,
+                cpu_captures,
+            );
+            if checkers_legal_moves(&board, true).is_empty() {
+                result = Some("No legal white move. CPU wins.".to_string());
+                continue;
+            }
+            if let Some(key) = wait_for_key() {
+                match key {
+                    Key::Up | Key::Char('w') if cursor >= 8 => cursor -= 8,
+                    Key::Down | Key::Char('s') if cursor < 56 => cursor += 8,
+                    Key::Left | Key::Char('a') if cursor % 8 > 0 => cursor -= 1,
+                    Key::Right | Key::Char('d') if cursor % 8 < 7 => cursor += 1,
+                    Key::Enter | Key::Space => {
+                        if let Some(from) = selected {
+                            if from == cursor {
+                                selected = None;
+                                message = "Selection cleared.".to_string();
+                                continue;
+                            }
+                            let legal = checkers_legal_moves(&board, true);
+                            if let Some((_, _, captured)) =
+                                legal.iter().copied().find(|&(move_from, move_to, _)| {
+                                    move_from == from && move_to == cursor
+                                })
+                            {
+                                checkers_apply_move(&mut board, from, cursor, captured);
+                                if captured.is_some() {
+                                    player_captures += 1;
+                                    play_sound(state, "score");
+                                } else {
+                                    play_sound(state, "paddle");
+                                }
+                                selected = None;
+                                if checkers_count(&board, false) == 0 {
+                                    result = Some("You cleared every black piece.".to_string());
+                                    continue;
+                                }
+                                let cpu_moves = checkers_legal_moves(&board, false);
+                                if cpu_moves.is_empty() {
+                                    result = Some("CPU has no legal move. You win.".to_string());
+                                    continue;
+                                }
+                                let (cpu_from, cpu_to, cpu_capture) =
+                                    checkers_pick_cpu_move(state, &board, &cpu_moves);
+                                checkers_apply_move(&mut board, cpu_from, cpu_to, cpu_capture);
+                                if cpu_capture.is_some() {
+                                    cpu_captures += 1;
+                                    play_sound(state, "alert");
+                                }
+                                if checkers_count(&board, true) == 0 {
+                                    result = Some("CPU captured your last piece.".to_string());
+                                } else {
+                                    message = "CPU moved. White to move.".to_string();
+                                }
+                            } else {
+                                message = "Illegal checkers move.".to_string();
+                                play_sound(state, "wall");
+                            }
+                        } else if checkers_is_white_piece(board[cursor]) {
+                            selected = Some(cursor);
+                            message = "Piece selected. Move diagonally or jump.".to_string();
+                        } else {
+                            message = "Select one of your white checkers.".to_string();
+                        }
+                    }
+                    _ if is_pause(key) => {
+                        if pause_screen(state).is_none() {
+                            return;
+                        }
+                    }
+                    _ if is_quit(key) => return,
+                    _ => {}
+                }
+            }
+        }
+        let result = result.unwrap_or_else(|| "Checkers ended.".to_string());
+        draw_checkers(
+            state,
+            &board,
+            cursor,
+            selected,
+            &result,
+            player_captures,
+            cpu_captures,
+        );
+        let score = 250u32 + player_captures * 80 - cpu_captures.min(3) * 35;
+        record_score(state, "Checkers", score);
+        if !wait_menu(
+            state,
+            "Checkers",
+            &[
+                result,
+                format!("Captures: {player_captures}-{cpu_captures}"),
+                format!("Score: {score}"),
+            ],
+            true,
+        ) {
+            return;
+        }
+    }
+}
+
+fn checkers_initial_board() -> [char; 64] {
+    let mut board = ['.'; 64];
+    for y in 0..3 {
+        for x in 0..8 {
+            if (x + y) % 2 == 1 {
+                board[checkers_idx(x, y)] = 'b';
+            }
+        }
+    }
+    for y in 5..8 {
+        for x in 0..8 {
+            if (x + y) % 2 == 1 {
+                board[checkers_idx(x, y)] = 'w';
+            }
+        }
+    }
+    board
+}
+
+fn checkers_idx(x: usize, y: usize) -> usize {
+    y * 8 + x
+}
+
+fn checkers_xy(index: usize) -> (i32, i32) {
+    ((index % 8) as i32, (index / 8) as i32)
+}
+
+fn checkers_is_white_piece(piece: char) -> bool {
+    matches!(piece, 'w' | 'W')
+}
+
+fn checkers_is_black_piece(piece: char) -> bool {
+    matches!(piece, 'b' | 'B')
+}
+
+fn checkers_is_king(piece: char) -> bool {
+    matches!(piece, 'W' | 'B')
+}
+
+fn checkers_dirs(piece: char) -> &'static [(i32, i32)] {
+    match piece {
+        'w' => &[(-1, -1), (1, -1)],
+        'b' => &[(-1, 1), (1, 1)],
+        'W' | 'B' => &[(-1, -1), (1, -1), (-1, 1), (1, 1)],
+        _ => &[],
+    }
+}
+
+fn checkers_legal_moves(
+    board: &[char; 64],
+    white_turn: bool,
+) -> Vec<(usize, usize, Option<usize>)> {
+    let mut moves = Vec::new();
+    let mut captures = Vec::new();
+    for from in 0..64 {
+        let piece = board[from];
+        if piece == '.' || checkers_is_white_piece(piece) != white_turn {
+            continue;
+        }
+        let (fx, fy) = checkers_xy(from);
+        for &(dx, dy) in checkers_dirs(piece) {
+            let nx = fx + dx;
+            let ny = fy + dy;
+            if !(0..8).contains(&nx) || !(0..8).contains(&ny) {
+                continue;
+            }
+            let step = checkers_idx(nx as usize, ny as usize);
+            if board[step] == '.' {
+                moves.push((from, step, None));
+            } else if checkers_is_white_piece(board[step]) != white_turn {
+                let jx = fx + dx * 2;
+                let jy = fy + dy * 2;
+                if (0..8).contains(&jx) && (0..8).contains(&jy) {
+                    let jump = checkers_idx(jx as usize, jy as usize);
+                    if board[jump] == '.' {
+                        captures.push((from, jump, Some(step)));
+                    }
+                }
+            }
+        }
+    }
+    if captures.is_empty() {
+        moves
+    } else {
+        captures
+    }
+}
+
+fn checkers_apply_move(board: &mut [char; 64], from: usize, to: usize, captured: Option<usize>) {
+    let mut piece = board[from];
+    board[from] = '.';
+    if let Some(captured) = captured {
+        board[captured] = '.';
+    }
+    let (_, y) = checkers_xy(to);
+    if piece == 'w' && y == 0 {
+        piece = 'W';
+    } else if piece == 'b' && y == 7 {
+        piece = 'B';
+    }
+    board[to] = piece;
+}
+
+fn checkers_pick_cpu_move(
+    state: &mut AppState,
+    board: &[char; 64],
+    moves: &[(usize, usize, Option<usize>)],
+) -> (usize, usize, Option<usize>) {
+    let mut best_score = i32::MIN;
+    let mut best_moves = Vec::new();
+    for &(from, to, captured) in moves {
+        let piece = board[from];
+        let (_, y) = checkers_xy(to);
+        let mut score = if captured.is_some() { 10 } else { 0 };
+        if piece == 'b' && y == 7 {
+            score += 6;
+        }
+        if checkers_is_king(piece) {
+            score += 2;
+        }
+        score += state.rng.range(0, 2);
+        if score > best_score {
+            best_score = score;
+            best_moves.clear();
+            best_moves.push((from, to, captured));
+        } else if score == best_score {
+            best_moves.push((from, to, captured));
+        }
+    }
+    best_moves[state.rng.usize(best_moves.len())]
+}
+
+fn checkers_count(board: &[char; 64], white: bool) -> usize {
+    board
+        .iter()
+        .filter(|&&piece| {
+            if white {
+                checkers_is_white_piece(piece)
+            } else {
+                checkers_is_black_piece(piece)
+            }
+        })
+        .count()
+}
+
+fn draw_checkers(
+    state: &AppState,
+    board: &[char; 64],
+    cursor: usize,
+    selected: Option<usize>,
+    message: &str,
+    player_captures: u32,
+    cpu_captures: u32,
+) {
+    let (rows, cols) = terminal_size();
+    let theme = state.theme().clone();
+    let top = rows / 2 - 6;
+    let left = cols / 2 - 17;
+    let mut buf = String::new();
+    clear_buf(&mut buf, &theme);
+    center(&mut buf, 0, "CHECKERS", &theme, Role::Title, true, cols);
+    center(
+        &mut buf,
+        1,
+        &format!("White w/W   Black b/B   Captures {player_captures}-{cpu_captures}"),
+        &theme,
+        Role::Accent,
+        false,
+        cols,
+    );
+    draw_box(
+        &mut buf,
+        top - 1,
+        left - 4,
+        12,
+        39,
+        "BOARD",
+        &theme,
+        Role::Accent,
+        state.glyphs(),
+    );
+    for y in 0..8 {
+        put(
+            &mut buf,
+            top + y,
+            left - 2,
+            &(8 - y).to_string(),
+            &theme,
+            Role::Muted,
+            false,
+        );
+        for x in 0..8 {
+            let index = checkers_idx(x, y);
+            let piece = board[index];
+            let marker = if (x + y) % 2 == 0 { " " } else { "." };
+            let text = if piece == '.' {
+                format!(" {marker} ")
+            } else {
+                format!(" {piece} ")
+            };
+            let role = if Some(index) == selected {
+                Role::Highlight
+            } else if checkers_is_white_piece(piece) {
+                Role::Success
+            } else if checkers_is_black_piece(piece) {
+                Role::Danger
+            } else {
+                Role::Muted
+            };
+            if index == cursor {
+                put_inv(
+                    &mut buf,
+                    top + y,
+                    left + x * 4,
+                    &text,
+                    &theme,
+                    Role::Highlight,
+                );
+            } else {
+                put(
+                    &mut buf,
+                    top + y,
+                    left + x * 4,
+                    &text,
+                    &theme,
+                    role,
+                    piece != '.' || Some(index) == selected,
+                );
+            }
+        }
+    }
+    put(
+        &mut buf,
+        top + 9,
+        left,
+        "  a   b   c   d   e   f   g   h",
+        &theme,
+        Role::Muted,
+        false,
+    );
+    center(
+        &mut buf,
+        top + 11,
+        message,
+        &theme,
+        Role::Secondary,
+        true,
+        cols,
+    );
+    center(
+        &mut buf,
+        top + 13,
+        "Enter selects/moves. Men crown into kings on the far edge.",
+        &theme,
+        Role::Muted,
+        false,
         cols,
     );
     flush(&buf);
@@ -15247,6 +16110,63 @@ mod tests {
     }
 
     #[test]
+    fn chess_setup_and_legal_moves_work() {
+        let board = chess_initial_board();
+        assert_eq!(board[chess_idx(4, 7)], 'K');
+        assert_eq!(board[chess_idx(4, 0)], 'k');
+        assert!(chess_legal_move(
+            &board,
+            chess_idx(4, 6),
+            chess_idx(4, 4),
+            true
+        ));
+        assert!(!chess_legal_move(
+            &board,
+            chess_idx(4, 6),
+            chess_idx(4, 3),
+            true
+        ));
+        assert!(chess_legal_move(
+            &board,
+            chess_idx(6, 7),
+            chess_idx(5, 5),
+            true
+        ));
+        let moved = chess_make_move(board, chess_idx(4, 6), chess_idx(4, 4));
+        assert_eq!(moved[chess_idx(4, 4)], 'P');
+        assert!(!chess_in_check(&moved, true));
+        assert!(!chess_all_legal_moves(&moved, false).is_empty());
+    }
+
+    #[test]
+    fn checkers_setup_and_capture_rules_work() {
+        let board = checkers_initial_board();
+        assert_eq!(checkers_count(&board, true), 12);
+        assert_eq!(checkers_count(&board, false), 12);
+        assert!(!checkers_legal_moves(&board, true).is_empty());
+        let mut capture_board = ['.'; 64];
+        capture_board[checkers_idx(2, 5)] = 'w';
+        capture_board[checkers_idx(3, 4)] = 'b';
+        let moves = checkers_legal_moves(&capture_board, true);
+        assert_eq!(
+            moves,
+            vec![(
+                checkers_idx(2, 5),
+                checkers_idx(4, 3),
+                Some(checkers_idx(3, 4))
+            )]
+        );
+        checkers_apply_move(
+            &mut capture_board,
+            checkers_idx(2, 5),
+            checkers_idx(4, 3),
+            Some(checkers_idx(3, 4)),
+        );
+        assert_eq!(capture_board[checkers_idx(4, 3)], 'w');
+        assert_eq!(capture_board[checkers_idx(3, 4)], '.');
+    }
+
+    #[test]
     fn shared_engine_rule_profiles_are_distinct() {
         assert_distinct(
             "falling profile",
@@ -15404,6 +16324,8 @@ mod tests {
             GameKind::StormSurge => scroll_rules("Storm Surge").mechanic.to_string(),
             GameKind::CrystalCavern => grid_rules("Crystal Cavern", 1).mechanic.to_string(),
             GameKind::TicTacToe => "tic-tac-toe-cpu".to_string(),
+            GameKind::Chess => "legal-chess-cpu".to_string(),
+            GameKind::Checkers => "mandatory-capture-checkers".to_string(),
             GameKind::Micro(index) => {
                 format!("micro-{}", micro_mode_label(MICRO_GAMES[index].mode))
             }
